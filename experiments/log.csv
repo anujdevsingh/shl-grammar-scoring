@@ -1,1 +1,2 @@
 id,date,features,model,cv_rmse,cv_pearson,lb_score,notes
+e000,2026-10-09,none,constant train mean (3.3134),1.2382,0.0,,in-sample RMSE = population std of labels (CV value is about the same); format-check submission

@@ -15,10 +15,12 @@ def find_file(name: str) -> Path:
     return hits[0]
 
 
-def validate_submission(path, sample_path=None) -> pd.DataFrame:
-    """Check that a submission matches sample_submission.csv in columns, row count and id order,
-    has no missing values, and all scores lie in [0, 5]. Raises AssertionError on failure."""
-    sample = pd.read_csv(sample_path or find_file("sample_submission.csv"))
+def validate_submission(path, ref_path=None) -> pd.DataFrame:
+    """Check that a submission matches test.csv in columns, row count and id order,
+    has no missing values, and all scores lie in [0, 5]. Raises AssertionError on failure.
+    test.csv is the reference because sample_submission.csv lists different file names
+    (only 25 of its 204 ids exist in test/; see docs/decisions.md)."""
+    sample = pd.read_csv(ref_path or find_file("test.csv"))
     sub = pd.read_csv(path)
     assert list(sub.columns) == list(sample.columns), f"columns {list(sub.columns)} != {list(sample.columns)}"
     assert len(sub) == len(sample), f"{len(sub)} rows, expected {len(sample)}"
