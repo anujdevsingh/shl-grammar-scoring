@@ -18,3 +18,11 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
 - **File numbers:** in train, the number in the file name correlates with the label (Pearson -0.55), because the files come in blocks with different average scores. Test files are numbered 0-215 separately, so this pattern cannot carry over. It is **not** used as a feature: it would not be a grammar signal.
 - **Submission ids:** `sample_submission.csv` has 204 rows, and only 25 of its file names exist in `test/`. `test.csv` lists exactly the 216 test files. Submissions use the 216 ids and order from `test.csv`; Confirmed: Kaggle accepted the 216-row file from `test.csv` (submission e000, public score 1.0050).
 - **Competition slug:** `shl-hiring-assessment-2026`. The slug in the handoff notes (`shl-intern-hiring-assessment`) returns 403.
+
+## D4. What the label-0 clips are
+- **Check:** Whisper-small (local) ran on the 37 label-0 clips and on 37 random other train clips. Only aggregate numbers were looked at.
+- **Result:**
+  - Label-0 clips have a higher no-speech probability (mean 0.63 vs 0.35) and lower ASR confidence (mean log-prob -0.98 vs -0.39).
+  - 21 of 37 are not confidently detected as English, against 5 of 37 for other clips.
+  - 9 of 37 have fewer than 20 words, against 0 for other clips.
+- **Meaning:** most label-0 clips are invalid recordings: noise, music, unclear audio or non-English speech, rather than very poor grammar. They can likely be detected from ASR confidence and audio features. So a "valid speech" detector plus a 1-5 grammar model is a realistic design. It is compared by CV against a single model trained on all clips.
