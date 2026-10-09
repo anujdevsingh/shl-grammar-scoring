@@ -41,3 +41,4 @@ wandb/
 mlruns/
 kaggle/transcribe/skip.txt
 kaggle/transcribe_b/
+kaggle/finetune/kernel.py
