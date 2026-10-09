@@ -72,7 +72,10 @@ def main():
     y = tr.set_index("filename").loc[folds.filename, "label"].to_numpy()
 
     F = pd.read_parquet(a.feat)
-    cols = [c for c in F.columns if c not in ("split", "filename")]
+    # Length-dependent counts are dropped: test clips are shorter than train (median 45 s vs 60 s),
+    # so raw duration / word / sentence counts would shift between train and test.
+    LENGTH = {"duration", "n_words", "n_sents"}
+    cols = [c for c in F.columns if c not in ("split", "filename") and c not in LENGTH]
     Ftr = F[F.split == "train"].set_index("filename").loc[folds.filename, cols].to_numpy(float)
     Fte = F[F.split == "test"].set_index("filename").loc[te.filename, cols].to_numpy(float)
 

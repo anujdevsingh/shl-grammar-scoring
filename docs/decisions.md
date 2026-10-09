@@ -33,3 +33,13 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
 - **Layer groups:** for both models, "all layers averaged" beats any single third, and the early layers are clearly the weakest. So the score depends on higher-level information (words and structure), not only on sound.
 - **Label-0 clips are not a problem for this model:** it already predicts them close to 0 (mean prediction 0.03, RMSE 0.28 on these clips). They cause only 1.4% of the squared error. A separate detector improved CV RMSE by only 0.004, which is smaller than the fold-to-fold noise (0.008). So we keep the single, simpler model. Jev's concern was valid to check, and the measurement shows it does not need extra machinery.
 - **Where the error is:** the model squeezes predictions toward the middle. Clips scored 2.0 are predicted 2.59 on average, and clips scored 5.0 are predicted 4.72. Most of the remaining error is in grading clips within 1-5. This is where transcript and grammar features (M3) should help.
+
+## D6. Transcript features (M3): measured, small gain
+- **Transcripts:** faster-whisper large-v3 on all 985 clips. One clip hit a word-alignment bug and was recovered by the retry without the prompt.
+- **Features:** 42 fluency and grammar features (pauses, speech rate, fillers, ASR confidence, vocabulary variety, GPT-2 likelihood, spaCy syntax, LanguageTool errors per 100 words).
+  - Raw length counts (duration, word count, sentence count) are excluded, because test clips are shorter.
+- **Alone:** CV RMSE 0.84 and Pearson 0.735, much weaker than the audio embeddings (0.524 / 0.906).
+  - The strongest single features are ASR word confidence (Pearson 0.68 with the label) and vocabulary variety (0.37).
+  - The direct grammar measures (LanguageTool rate, GPT-2 likelihood, syntax depth) are weaker.
+  - Likely reason: Whisper cleans up speech, so many errors never reach the text.
+- **Stacked with audio:** CV RMSE 0.5197 vs 0.5237. A gain of 0.004 is smaller than the fold-to-fold noise (0.007), so it is **not counted as an improvement** and was not submitted. The features stay in the report because they explain *what* the score depends on.
