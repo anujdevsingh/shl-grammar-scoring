@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import soundfile as sf
 
 PROMPT = ("Umm, let me think like, hmm... Okay, here's what I'm, like, thinking. "
           "So, uh, I, I went to the, the market and, um, I buyed some... I mean, I bought some things.")
@@ -56,8 +57,12 @@ def main():
     t0 = time.time()
     with path.open("a") as fh:
         for k, (split, fn) in enumerate(todo, 1):
+            # Load the audio ourselves (16 kHz mono float32) instead of letting faster-whisper decode
+            # the file: its decoder depends on the PyAV version, which differs between machines.
+            x, sr = sf.read(str(data / split / fn), dtype="float32", always_2d=True)
+            assert sr == 16000, (fn, sr)
             segs, info = model.transcribe(
-                str(data / split / fn), language="en", beam_size=5, temperature=0.0,
+                x.mean(axis=1), language="en", beam_size=5, temperature=0.0,
                 condition_on_previous_text=False, word_timestamps=True,
                 initial_prompt=PROMPT, vad_filter=False)
             segs = list(segs)
