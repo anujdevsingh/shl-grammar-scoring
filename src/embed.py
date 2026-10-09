@@ -8,8 +8,11 @@ so each model gives an array of shape (n_clips, n_layers, 2 * hidden_size).
 - WavLM takes the whole clip at once.
 Runs on Kaggle GPU (heavy models) or locally with small models for testing.
 Saves float16 .npy + the file order, every CKPT clips, and resumes from a checkpoint.
+Multi-GPU: run one process per GPU with --shard i --nshards N (each takes a contiguous block of files),
+then once with --merge to join the blocks in order.
 
-Usage: python embed.py --data DIR --out DIR [--whisper openai/whisper-large-v3] [--wavlm microsoft/wavlm-large] [--limit N]
+Usage: python embed.py --data DIR --out DIR [--whisper openai/whisper-large-v3] [--wavlm microsoft/wavlm-large]
+                       [--limit N] [--shard I --nshards N | --merge]
 """
 import argparse
 import json
@@ -85,8 +88,8 @@ class WavLMEmbedder:
         return mean_std(torch.stack(hs, 0)[:, 0].float())
 
 
-def run(tag, embedder, files, out):
-    npy, ckpt = out / f"emb_{tag}.npy", out / f"emb_{tag}.partial.npy"
+def run(tag, embedder, files, out, suffix=""):
+    npy, ckpt = out / f"emb_{tag}{suffix}.npy", out / f"emb_{tag}{suffix}.partial.npy"
     if npy.exists():
         print(f"[{tag}] done already, skipping")
         return
@@ -111,6 +114,9 @@ def main():
     ap.add_argument("--whisper", default="openai/whisper-large-v3")
     ap.add_argument("--wavlm", default="microsoft/wavlm-large")
     ap.add_argument("--limit", type=int, default=0, help="only the first N train + N test files (smoke test)")
+    ap.add_argument("--shard", type=int, default=0)
+    ap.add_argument("--nshards", type=int, default=1)
+    ap.add_argument("--merge", action="store_true", help="join shard outputs into one file per model")
     a = ap.parse_args()
     data, out = Path(a.data), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -120,14 +126,29 @@ def main():
     order = pd.concat([tr[["filename"]].assign(split="train"), te[["filename"]].assign(split="test")])
     order.to_csv(out / "emb_order.csv", index=False)
     files = [str(data / s / f) for f, s in zip(order.filename, order.split)]
+    models = [(t, c, n) for t, c, n in [("whisper", WhisperEmbedder, a.whisper), ("wavlm", WavLMEmbedder, a.wavlm)]
+              if n.lower() != "none"]
+    if a.merge:
+        for tag, _, name in models:
+            parts = [out / f"emb_{tag}.s{i}.npy" for i in range(a.nshards)]
+            arr = np.concatenate([np.load(p) for p in parts])
+            assert len(arr) == len(files), (tag, arr.shape, len(files))
+            np.save(out / f"emb_{tag}.npy", arr)
+            for p in parts:
+                p.unlink()
+            json.dump({"model": name}, open(out / f"emb_{tag}.json", "w"))
+            print(f"[{tag}] merged {arr.shape}; finite={np.isfinite(arr).all()}")
+        return
+    block = np.array_split(np.arange(len(files)), a.nshards)[a.shard]
+    files = [files[i] for i in block]
+    suffix = f".s{a.shard}" if a.nshards > 1 else ""
     dev, dt = device_dtype()
-    print("device", dev, dt, "| files", len(files))
-    for tag, cls, name in [("whisper", WhisperEmbedder, a.whisper), ("wavlm", WavLMEmbedder, a.wavlm)]:
-        if name.lower() == "none":
-            continue
+    print("device", dev, dt, "| shard", a.shard, "of", a.nshards, "| files", len(files))
+    for tag, cls, name in models:
         emb = cls(name, dev, dt)
-        run(tag, emb, files, out)
-        json.dump({"model": name}, open(out / f"emb_{tag}.json", "w"))
+        run(tag, emb, files, out, suffix)
+        if a.nshards == 1:
+            json.dump({"model": name}, open(out / f"emb_{tag}.json", "w"))
         del emb
         if dev == "cuda":
             torch.cuda.empty_cache()
