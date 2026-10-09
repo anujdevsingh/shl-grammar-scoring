@@ -1,0 +1,14 @@
+{
+  "id": "anujdevsingh/shl-grammar-transcribe",
+  "title": "shl-grammar-transcribe",
+  "code_file": "kernel.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "competition_sources": ["shl-hiring-assessment-2026"],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "machine_shape": "NvidiaTeslaT4"
+}
