@@ -1,0 +1,134 @@
+"""Stage A: layer-wise audio embeddings (Whisper encoder, WavLM).
+
+For every clip and every hidden layer we keep the mean and the std over time,
+so each model gives an array of shape (n_clips, n_layers, 2 * hidden_size).
+- Whisper's encoder takes at most 30 s, so clips are cut into 30 s windows.
+  Only frames that hold real audio are pooled (the padding is ignored), and
+  windows are combined weighted by their length.
+- WavLM takes the whole clip at once.
+Runs on Kaggle GPU (heavy models) or locally with small models for testing.
+Saves float16 .npy + the file order, every CKPT clips, and resumes from a checkpoint.
+
+Usage: python embed.py --data DIR --out DIR [--whisper openai/whisper-large-v3] [--wavlm microsoft/wavlm-large] [--limit N]
+"""
+import argparse
+import json
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import soundfile as sf
+import torch
+from transformers import AutoFeatureExtractor, WavLMModel, WhisperFeatureExtractor, WhisperModel
+
+SR = 16000
+WIN = 30 * SR  # Whisper window: 30 s
+CKPT = 50
+
+
+def device_dtype():
+    if torch.cuda.is_available():
+        return "cuda", torch.float16
+    if torch.backends.mps.is_available():
+        return "mps", torch.float32
+    return "cpu", torch.float32
+
+
+def load(path):
+    x, sr = sf.read(path, dtype="float32", always_2d=True)
+    assert sr == SR, f"{path}: sample rate {sr}"
+    x = x.mean(axis=1)
+    return x / (np.abs(x).max() + 1e-8)  # peak-normalise; quiet test clips get the same scale
+
+
+def mean_std(h):
+    """h: (layers, time, dim) -> (layers, 2*dim)"""
+    return torch.cat([h.mean(1), h.std(1)], dim=-1)
+
+
+class WhisperEmbedder:
+    def __init__(self, name, dev, dt):
+        self.fe = WhisperFeatureExtractor.from_pretrained(name)
+        self.enc = WhisperModel.from_pretrained(name, torch_dtype=dt).get_encoder().to(dev).eval()
+        self.dev, self.dt = dev, dt
+
+    @torch.no_grad()
+    def __call__(self, x):
+        wins = [x[i:i + WIN] for i in range(0, len(x), WIN)]
+        wins = [w for w in wins if len(w) >= SR] or [x]  # drop tail windows shorter than 1 s
+        feats = self.fe(wins, sampling_rate=SR, return_tensors="pt").input_features.to(self.dev, self.dt)
+        hs = self.enc(feats, output_hidden_states=True).hidden_states  # each (n_win, 1500, d)
+        h = torch.stack(hs, 1).float()  # (n_win, layers, 1500, d)
+        pooled, weights = [], []
+        for k, w in enumerate(wins):
+            n = max(1, min(1500, int(round(len(w) / SR * 50))))  # 50 encoder frames per second
+            pooled.append(mean_std(h[k, :, :n]))
+            weights.append(n)
+        wts = torch.tensor(weights, dtype=torch.float32, device=h.device)
+        return (torch.stack(pooled) * wts[:, None, None]).sum(0) / wts.sum()
+
+
+class WavLMEmbedder:
+    def __init__(self, name, dev, dt):
+        self.fe = AutoFeatureExtractor.from_pretrained(name)
+        self.m = WavLMModel.from_pretrained(name, torch_dtype=dt).to(dev).eval()
+        self.dev, self.dt = dev, dt
+
+    @torch.no_grad()
+    def __call__(self, x):
+        inp = self.fe(x, sampling_rate=SR, return_tensors="pt").input_values.to(self.dev, self.dt)
+        hs = self.m(inp, output_hidden_states=True).hidden_states  # each (1, T, d)
+        return mean_std(torch.stack(hs, 0)[:, 0].float())
+
+
+def run(tag, embedder, files, out):
+    npy, ckpt = out / f"emb_{tag}.npy", out / f"emb_{tag}.partial.npy"
+    if npy.exists():
+        print(f"[{tag}] done already, skipping")
+        return
+    done = list(np.load(ckpt)) if ckpt.exists() else []
+    print(f"[{tag}] {len(files)} files, resuming at {len(done)}")
+    t0 = time.time()
+    for i in range(len(done), len(files)):
+        done.append(embedder(load(files[i])).cpu().numpy().astype(np.float16))
+        if (i + 1) % CKPT == 0:
+            np.save(ckpt, np.stack(done))
+            print(f"[{tag}] {i + 1}/{len(files)}  {(time.time() - t0) / (i + 1 - 0):.2f} s/file", flush=True)
+    arr = np.stack(done)
+    np.save(npy, arr)
+    ckpt.unlink(missing_ok=True)
+    print(f"[{tag}] saved {arr.shape} in {time.time() - t0:.0f} s; finite={np.isfinite(arr).all()}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data", required=True, help="folder holding train.csv, test.csv, train/, test/")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--whisper", default="openai/whisper-large-v3")
+    ap.add_argument("--wavlm", default="microsoft/wavlm-large")
+    ap.add_argument("--limit", type=int, default=0, help="only the first N train + N test files (smoke test)")
+    a = ap.parse_args()
+    data, out = Path(a.data), Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    tr, te = pd.read_csv(data / "train.csv"), pd.read_csv(data / "test.csv")
+    if a.limit:
+        tr, te = tr.head(a.limit), te.head(a.limit)
+    order = pd.concat([tr[["filename"]].assign(split="train"), te[["filename"]].assign(split="test")])
+    order.to_csv(out / "emb_order.csv", index=False)
+    files = [str(data / s / f) for f, s in zip(order.filename, order.split)]
+    dev, dt = device_dtype()
+    print("device", dev, dt, "| files", len(files))
+    for tag, cls, name in [("whisper", WhisperEmbedder, a.whisper), ("wavlm", WavLMEmbedder, a.wavlm)]:
+        if name.lower() == "none":
+            continue
+        emb = cls(name, dev, dt)
+        run(tag, emb, files, out)
+        json.dump({"model": name}, open(out / f"emb_{tag}.json", "w"))
+        del emb
+        if dev == "cuda":
+            torch.cuda.empty_cache()
+
+
+if __name__ == "__main__":
+    main()
