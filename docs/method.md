@@ -80,6 +80,13 @@ The design was checked by a second model (TypeSafe Jev, jev-1.13.0). Only this d
    - Calibrate the final predictions with a linear map fitted on out-of-fold predictions. Clip to the label range.
    - Use at most a few leaderboard submissions to check whether the test set has 0-type clips (the constant baseline suggests few). Never tune many knobs on the leaderboard.
 
+### Second review, round 2 (full context: plan, milestones, risks, research claims, revised method)
+Jev agreed most strongly with combining audio and transcript (0.91), rule compliance (0.85) and per-second features (0.79). Overall confidence was 2.69/4. Changes made:
+- **Layer choice:** picking 1 of 33 layers on the same CV would overfit (0.57). We compare **4 fixed layer groups only** (early / middle / late / all layers averaged) and report all four.
+- **Loudness:** peak normalisation was judged weak (0.46). Clips are now **RMS-normalised** to about -20 dBFS, so one loud click cannot set the scale.
+- **Caveat on the evidence:** the Whisper-encoder result (0.53) comes from overall proficiency scoring, not grammar alone. We keep it first because it is cheap, and the CV result decides.
+- **Label-0 check first:** Jev's top suggestion (0.61). This runs locally in parallel with M2, because the embeddings are needed for all clips either way.
+
 ## Sources
 - Speak & Improve Challenge 2025: Tasks and Baseline Systems. https://arxiv.org/abs/2412.11985
 - One Whisper to Grade Them All (Aalto, SLaTE 2025). https://arxiv.org/abs/2507.17918

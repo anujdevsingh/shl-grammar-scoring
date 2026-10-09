@@ -44,7 +44,10 @@ def load(path):
     x, sr = sf.read(path, dtype="float32", always_2d=True)
     assert sr == SR, f"{path}: sample rate {sr}"
     x = x.mean(axis=1)
-    return x / (np.abs(x).max() + 1e-8)  # peak-normalise; quiet test clips get the same scale
+    # Loudness (RMS) normalisation to about -20 dBFS: quiet test clips get the same level as train.
+    # RMS, not peak, so one loud click does not decide the scale of the whole clip.
+    x = x * (0.1 / (np.sqrt(np.mean(x ** 2)) + 1e-8))
+    return np.clip(x, -1.0, 1.0)
 
 
 def mean_std(h):
