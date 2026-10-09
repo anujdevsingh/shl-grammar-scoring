@@ -49,3 +49,12 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
 - **Alone:** CV RMSE 0.592 / Pearson 0.878. That is clearly **weaker** than WavLM-large (0.538) and Whisper-large-v3 (0.554) when frozen. Being newer and trained on more data did not make it better for this task.
 - **Combined:** added to Whisper + WavLM, it gives 0.520 vs 0.524. That is within noise, so it was not submitted.
 - **Lesson:** frozen encoders have plateaued at about 0.52. The remaining options are fine-tuning (running) and a model that can judge grammar directly.
+
+## D8. Fine-tuning WavLM-large (Stage G)
+- **Setup:** WavLM-large trained on our scores. Random 20 s crops, 8 epochs (fixed, never picked on the validation fold), a small learning rate for the encoder and a larger one for the head. 5 folds on Kaggle T4 x2 took 81 min per fold and 4.1 h of wall time.
+- **Alone:** CV RMSE 0.550 / Pearson 0.896 on repeat r0. That is *worse* than the frozen Whisper+WavLM Ridge on the same folds (0.521 / 0.907). With only 615 training clips per fold, end-to-end training does not beat a regularised linear model on frozen features. This matches the original plan's warning that fine-tuning is costly for a modest gain on small data.
+- **Stacked:** the fine-tuned model makes different mistakes (test correlation with the frozen model 0.94), so blending helps. The stack gives **0.511 vs 0.521**:
+  - it improves all 5 folds;
+  - the bootstrap 95% interval of the gain is [0.0015, 0.017], so the gain is small but real;
+  - a plain 50/50 average gives 0.513, so the gain does not depend on the fitted weights.
+- **Limits:** only one repeat (r0) was run, because of GPU cost. No in-sample training RMSE exists for the fine-tuned part, because there is no model trained on all clips; the test prediction averages the 5 fold models.
