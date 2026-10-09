@@ -40,3 +40,4 @@ venv/
 wandb/
 mlruns/
 kaggle/transcribe/skip.txt
+kaggle/transcribe_b/
