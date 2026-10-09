@@ -1,3 +1,5 @@
 id,date,features,model,cv_rmse,cv_pearson,lb_score,notes
 e000,2026-10-09,none,constant train mean (3.3134),1.2382,0.0,1.0050,in-sample RMSE = population std of labels (CV value is about the same); format-check submission
 e001,2026-10-09,whisper-tiny encoder all layers 1-4 mean+std (local),StandardScaler+RidgeCV (alpha 316),0.5679,0.8887,0.4529,in-sample train RMSE 0.4246; 5x3 CV sd RMSE 0.0039; test pred mean 3.249 sd 0.771
+e002,2026-10-09,whisper-large-v3 enc all layers 1-32 + wavlm-large all layers 1-24 (mean+std; layer-group average; concat),StandardScaler+RidgeCV (alpha 316),0.5237,0.9061,,in-sample train RMSE 0.2488; CV sd 0.0070; groups: whisper all 0.5540 / wavlm all 0.5376 alone; test pred mean 3.262 sd 0.861
+e002b,2026-10-09,same as e002,label-0 detector (logistic) x Ridge on 1-5 clips,0.5196,0.9077,,gain 0.004 is within fold noise (sd 0.008); label-0 clips already predicted ~0 by e002 (RMSE 0.28 on them; 1.4% of squared error); not adopted

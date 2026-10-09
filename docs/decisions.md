@@ -26,3 +26,10 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
   - 21 of 37 are not confidently detected as English, against 5 of 37 for other clips.
   - 9 of 37 have fewer than 20 words, against 0 for other clips.
 - **Meaning:** most label-0 clips are invalid recordings: noise, music, unclear audio or non-English speech, rather than very poor grammar. They can likely be detected from ASR confidence and audio features. So a "valid speech" detector plus a 1-5 grammar model is a realistic design. It is compared by CV against a single model trained on all clips.
+
+## D5. Audio embedding results and the label-0 decision (M2)
+- **Large models vs tiny:** Whisper-large-v3 + WavLM-large reach CV RMSE 0.524 and Pearson 0.906. Whisper-tiny alone gave 0.568 / 0.889.
+- **WavLM vs Whisper:** WavLM alone does better than Whisper alone (0.538 vs 0.554 RMSE), and concatenating both is better than either.
+- **Layer groups:** for both models, "all layers averaged" beats any single third, and the early layers are clearly the weakest. So the score depends on higher-level information (words and structure), not only on sound.
+- **Label-0 clips are not a problem for this model:** it already predicts them close to 0 (mean prediction 0.03, RMSE 0.28 on these clips). They cause only 1.4% of the squared error. A separate detector improved CV RMSE by only 0.004, which is smaller than the fold-to-fold noise (0.008). So we keep the single, simpler model. Jev's concern was valid to check, and the measurement shows it does not need extra machinery.
+- **Where the error is:** the model squeezes predictions toward the middle. Clips scored 2.0 are predicted 2.59 on average, and clips scored 5.0 are predicted 4.72. Most of the remaining error is in grading clips within 1-5. This is where transcript and grammar features (M3) should help.
