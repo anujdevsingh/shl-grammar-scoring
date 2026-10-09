@@ -53,7 +53,7 @@ def main():
     y = tr.set_index("filename").loc[folds.filename, "label"].to_numpy()
 
     feats, results = {}, []
-    tags = [t for t in ["whisper", "wavlm"] if (emb / f"emb_{t}.npy").exists()]
+    tags = [t for t in ["whisper", "wavlm", "w2vbert"] if (emb / f"emb_{t}.npy").exists()]
     for tag in tags:
         E = np.load(emb / f"emb_{tag}.npy").astype(np.float32)  # (n, layers, 2d)
         for g, layers in layer_groups(E.shape[1]).items():
@@ -65,17 +65,16 @@ def main():
                   f"RMSE {m['rmse']:.4f} ±{m['rmse_sd']:.4f}  Pearson {m['pearson']:.4f} ±{m['pearson_sd']:.4f}", flush=True)
     res = pd.DataFrame(results)
     combo = None
-    if len(tags) == 2:
-        # Combination: concatenate the best Whisper group and the best WavLM group.
-        bw = res[res.features.str.startswith("whisper")].sort_values("rmse").features.iloc[0]
-        bl = res[res.features.str.startswith("wavlm")].sort_values("rmse").features.iloc[0]
-        combo = np.hstack([feats[bw], feats[bl]])
+    if len(tags) >= 2:
+        # Combination: concatenate the best layer group of every model.
+        picks = [res[res.features.str.startswith(t + "_")].sort_values("rmse").features.iloc[0] for t in tags]
+        combo = np.hstack([feats[p] for p in picks])
         _, m = cv_predict(fit_predict, combo[itr], y, folds)
-        res.loc[len(res)] = dict(features=f"{bw}+{bl}", layers="concat", **m)
-        print(f"concat {bw}+{bl}: RMSE {m['rmse']:.4f} ±{m['rmse_sd']:.4f}  Pearson {m['pearson']:.4f} ±{m['pearson_sd']:.4f}")
-
+        res.loc[len(res)] = dict(features="+".join(picks), layers="concat", **m)
+        print(f"concat {'+'.join(picks)}: RMSE {m['rmse']:.4f} ±{m['rmse_sd']:.4f}  Pearson {m['pearson']:.4f} ±{m['pearson_sd']:.4f}")
     best = res.sort_values("rmse").iloc[0]
     X = combo if "+" in best.features else feats[best.features]
+    np.save(ROOT / "cache" / f"oof_{a.exp}.npy", cv_predict(fit_predict, X[itr], y, folds)[0])
     model = make_pipeline(StandardScaler(), RidgeCV(alphas=ALPHAS)).fit(X[itr], y)
     train_rmse = rmse(y, model.predict(X[itr]))
     print(f"\nBEST {best.features}: CV RMSE {best.rmse:.4f}  CV Pearson {best.pearson:.4f}  "

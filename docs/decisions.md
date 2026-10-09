@@ -43,3 +43,9 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
   - The direct grammar measures (LanguageTool rate, GPT-2 likelihood, syntax depth) are weaker.
   - Likely reason: Whisper cleans up speech, so many errors never reach the text.
 - **Stacked with audio:** CV RMSE 0.5197 vs 0.5237. A gain of 0.004 is smaller than the fold-to-fold noise (0.007), so it is **not counted as an improvement** and was not submitted. The features stay in the report because they explain *what* the score depends on.
+
+## D7. Newer encoder: w2v-BERT 2.0 (frozen)
+- **Setup:** w2v-BERT 2.0 (Meta, MIT, pre-trained on 4.5M hours) embedded on Kaggle T4 x2 in 11.6 min.
+- **Alone:** CV RMSE 0.592 / Pearson 0.878. That is clearly **weaker** than WavLM-large (0.538) and Whisper-large-v3 (0.554) when frozen. Being newer and trained on more data did not make it better for this task.
+- **Combined:** added to Whisper + WavLM, it gives 0.520 vs 0.524. That is within noise, so it was not submitted.
+- **Lesson:** frozen encoders have plateaued at about 0.52. The remaining options are fine-tuning (running) and a model that can judge grammar directly.
