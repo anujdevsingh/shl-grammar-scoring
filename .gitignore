@@ -39,3 +39,4 @@ venv/
 .DS_Store
 wandb/
 mlruns/
+kaggle/transcribe/skip.txt
