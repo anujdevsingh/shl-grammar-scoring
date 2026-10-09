@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 import soundfile as sf
 import torch
-from transformers import AutoFeatureExtractor, WavLMModel, WhisperFeatureExtractor, WhisperModel
+from transformers import AutoFeatureExtractor, Wav2Vec2BertModel, WavLMModel, WhisperFeatureExtractor, WhisperModel
 
 SR = 16000
 WIN = 30 * SR  # Whisper window: 30 s
@@ -88,6 +88,21 @@ class WavLMEmbedder:
         return mean_std(torch.stack(hs, 0)[:, 0].float())
 
 
+class W2VBertEmbedder:
+    """w2v-BERT 2.0 (Meta, MIT): Conformer encoder on 80-dim filterbanks, takes the whole clip."""
+
+    def __init__(self, name, dev, dt):
+        self.fe = AutoFeatureExtractor.from_pretrained(name)
+        self.m = Wav2Vec2BertModel.from_pretrained(name, torch_dtype=dt).to(dev).eval()
+        self.dev, self.dt = dev, dt
+
+    @torch.no_grad()
+    def __call__(self, x):
+        inp = self.fe(x, sampling_rate=SR, return_tensors="pt").input_features.to(self.dev, self.dt)
+        hs = self.m(inp, output_hidden_states=True).hidden_states  # each (1, T, d)
+        return mean_std(torch.stack(hs, 0)[:, 0].float())
+
+
 def run(tag, embedder, files, out, suffix=""):
     npy, ckpt = out / f"emb_{tag}{suffix}.npy", out / f"emb_{tag}{suffix}.partial.npy"
     if npy.exists():
@@ -113,6 +128,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--whisper", default="openai/whisper-large-v3")
     ap.add_argument("--wavlm", default="microsoft/wavlm-large")
+    ap.add_argument("--w2vbert", default="none", help="e.g. facebook/w2v-bert-2.0")
     ap.add_argument("--limit", type=int, default=0, help="only the first N train + N test files (smoke test)")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--nshards", type=int, default=1)
@@ -126,7 +142,8 @@ def main():
     order = pd.concat([tr[["filename"]].assign(split="train"), te[["filename"]].assign(split="test")])
     order.to_csv(out / "emb_order.csv", index=False)
     files = [str(data / s / f) for f, s in zip(order.filename, order.split)]
-    models = [(t, c, n) for t, c, n in [("whisper", WhisperEmbedder, a.whisper), ("wavlm", WavLMEmbedder, a.wavlm)]
+    models = [(t, c, n) for t, c, n in [("whisper", WhisperEmbedder, a.whisper), ("wavlm", WavLMEmbedder, a.wavlm),
+                                          ("w2vbert", W2VBertEmbedder, a.w2vbert)]
               if n.lower() != "none"]
     if a.merge:
         for tag, _, name in models:
