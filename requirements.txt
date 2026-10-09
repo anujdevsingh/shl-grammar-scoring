@@ -1,0 +1,23 @@
+# Starting point. Pin exact versions once the environment works (pip freeze > requirements.lock).
+numpy
+pandas
+scipy
+scikit-learn
+lightgbm
+catboost
+matplotlib
+seaborn
+jupyter
+nbstripout
+kaggle
+tqdm
+soundfile
+librosa
+torch
+torchaudio
+transformers
+faster-whisper
+sentence-transformers
+spacy
+language-tool-python
+shap

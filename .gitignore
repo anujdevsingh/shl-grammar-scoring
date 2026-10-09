@@ -1,0 +1,41 @@
+# Competition data and anything derived from it (rules: competition use only)
+data/*
+!data/.gitkeep
+cache/
+transcripts/
+features/
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.npy
+*.npz
+*.parquet
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+outputs/*
+!outputs/.gitkeep
+
+# Private handoff and instructions
+private/
+CLAUDE.md
+
+# Secrets
+kaggle.json
+.kaggle/
+.env
+*.key
+
+# Python / notebooks / OS
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+.DS_Store
+wandb/
+mlruns/
