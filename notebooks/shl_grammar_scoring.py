@@ -21,9 +21,10 @@
 # transcript as a second view. (1) Frozen speech encoders (Whisper-large-v3 and WavLM-large) turn each clip into a
 # fixed-length vector, and a Ridge regression maps it to a score. (2) WavLM-large is also fine-tuned end to end
 # on the scores. (3) Whisper transcripts give fluency and grammar features (pauses, speech rate, fillers,
-# LanguageTool errors, GPT-2 likelihood, syntax depth). (4) Optionally, an open audio-LLM (Qwen2-Audio) listens
-# to each clip and rates it with the rubric. A non-negative linear stack combines the branches. Every number
-# below comes from the same fixed cross-validation folds.
+# LanguageTool errors, GPT-2 likelihood, syntax depth). A non-negative linear stack combines the three branches.
+# Other ideas were measured and dropped because they did not beat the fold-to-fold noise: SVR, w2v-BERT 2.0, a
+# label-0 detector, and an audio-LLM judge (Qwen2-Audio) that rated each clip with the rubric. Every number below
+# comes from the same fixed cross-validation folds.
 #
 # **Contents.** 1 Data · 2 Preprocessing · 3 Features and models · 4 Results (training RMSE, CV RMSE, Pearson)
 # · 5 Visualisations · 6 Error analysis and limitations · 7 Reproduce
@@ -89,7 +90,7 @@ plt.show()
 # | **Frozen audio** | Whisper-large-v3 encoder + WavLM-large; mean and std over time of every layer, averaged per model | Standardise → RidgeCV |
 # | **Fine-tuned audio** | WavLM-large trained on our scores (20 s random crops, 8 fixed epochs, learned layer weights + small MLP head) | 5 fold models |
 # | **Transcript** | faster-whisper large-v3 transcripts (prompted to keep "um", restarts). 42 features: pauses, speech rate, fillers, ASR confidence, vocabulary variety, LanguageTool errors / 100 words, GPT-2 likelihood, syntax depth, clauses | Standardise → RidgeCV |
-# | **Audio-LLM judge** (optional) | Qwen2-Audio-7B listens and rates grammar with the rubric; expected score from the probabilities of "1"–"5" | RidgeCV on judge scores |
+# | *Audio-LLM judge (tried, dropped)* | Qwen2-Audio-7B listens and rates grammar with the rubric; expected score from the probabilities of "1"–"5" | correlation with labels only 0.43; no gain in the stack |
 # | **Stack** | how much to trust each branch | Non-negative linear regression on out-of-fold predictions |
 #
 # **Validation.** Stratified 5-fold CV with folds fixed once and reused for every model. The frozen models used
@@ -228,7 +229,9 @@ plt.show()
 #   word counts are excluded, and audio is loudness-normalised. The leaderboard (lower RMSE than CV) suggests the
 #   test labels are less spread out than train.
 # - **Tried, no gain (kept for transparency):** SVR instead of Ridge (0.523 vs 0.524), frozen w2v-BERT 2.0 added to
-#   the stack (0.520), and a label-0 detector (0.520).
+#   the stack (0.520), a label-0 detector (0.520), and the Qwen2-Audio rubric judge. The judge correlated only 0.43
+#   with the labels and changed the final stack by 0.0007. A general audio-LLM does not know these raters' scale;
+#   models trained on the 769 labelled clips do.
 #
 # ## 7. Reproduce
 # ```
@@ -237,11 +240,11 @@ plt.show()
 # kaggle/build_embed.sh; kaggle kernels push -p kaggle/embed --accelerator NvidiaTeslaT4      # frozen embeddings
 # kaggle/build_transcribe.sh; kaggle kernels push -p kaggle/transcribe --accelerator NvidiaTeslaT4
 # kaggle/build_finetune.sh; kaggle kernels push -p kaggle/finetune --accelerator NvidiaTeslaT4
-# kaggle/build_judge.sh; kaggle kernels push -p kaggle/judge --accelerator NvidiaTeslaT4      # optional
+# kaggle/build_judge.sh; kaggle kernels push -p kaggle/judge --accelerator NvidiaTeslaT4      # tried, not in the final engine
 # kaggle kernels output <kernel> -p cache/<dir>   # emb, ft, judge; transcripts -> cache/transcripts.jsonl
 # python src/features.py                    # transcript features (needs Java for LanguageTool)
 # python src/train_emb.py; python src/train_text.py
-# python src/final.py                       # stack + outputs/submission_final.csv
+# python src/final.py --no-judge            # stack + outputs/submission_final.csv
 # ```
 # Heavy stages run on Kaggle T4 ×2 (one worker per GPU) and write checkpoints, so a dropped session can resume.
 # This notebook only reads the cached results in `cache/`.
