@@ -98,7 +98,8 @@ def main():
     train_in = np.clip(meta.predict(np.c_[[base[n][1] for n in names]].T), 0, 5)
     test = np.clip(meta.predict(np.c_[[base[n][2] for n in names]].T), 0, 5)
 
-    rows = [dict(model="mean baseline", cv_rmse=rmse(y, np.full_like(y, y.mean())), cv_pearson=0.0)]
+    base_rmse = rmse(y, np.full_like(y, y.mean()))
+    rows = [dict(model="mean baseline", cv_rmse=base_rmse, cv_pearson=0.0, train_rmse=base_rmse)]
     for n in names:
         rows.append(dict(model=n, cv_rmse=rmse(y, base[n][0]), cv_pearson=pearson(y, base[n][0]),
                          train_rmse=rmse(y, base[n][1]) if n != "finetuned" else np.nan))
