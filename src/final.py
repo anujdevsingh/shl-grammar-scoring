@@ -3,6 +3,7 @@
 Base models (out-of-fold predictions on repeat r0 of the fixed folds; fine-tuning was run on r0 only):
   frozen     Ridge on frozen Whisper-large-v3 + WavLM-large embeddings      (src/train_emb.py, e002)
   finetuned  WavLM-large fine-tuned on our scores, 5 fold models             (src/finetune.py)
+  audiollm   Qwen2-Audio-7B fine-tuned with QLoRA, 5 fold models, if present (src/ft_alm.py)
   text       Ridge on fluency + grammar transcript features                  (src/train_text.py, e003)
   judge      Ridge on the Qwen2-Audio rubric-judge scores, if available      (src/judge.py)
 Stack: non-negative linear regression on the base predictions, evaluated fold by fold (fit on 4 folds, score the 5th).
@@ -60,13 +61,19 @@ def main():
     base["frozen"] = oof_and_full(emb_fp, A[[idx[("train", f)] for f in folds.filename]], y,
                                   A[[idx[("test", f)] for f in te.filename]], fold)
 
-    # fine-tuned WavLM (5 fold models): OOF from each fold's model; test = mean of the 5 models
-    ft = ROOT / "cache" / "ft"
-    o = pd.concat([pd.read_csv(ft / f"oof_fold{k}.csv") for k in range(N_SPLITS)]).set_index("filename")
-    t = np.mean([pd.read_csv(ft / f"test_fold{k}.csv").set_index("filename").loc[te.filename, "pred"].to_numpy()
-                 for k in range(N_SPLITS)], 0)
-    p = o.loc[folds.filename, "pred"].to_numpy()
-    base["finetuned"] = (p, p, t)  # no all-data model: in-sample slot uses OOF
+    # fine-tuned models (5 fold models each): OOF from each fold's model; test = mean of the 5 models.
+    # No all-data model exists, so the in-sample slot uses the OOF predictions.
+    def fold_models(d):
+        o = pd.concat([pd.read_csv(d / f"oof_fold{k}.csv") for k in range(N_SPLITS)]).set_index("filename")
+        t = np.mean([pd.read_csv(d / f"test_fold{k}.csv").set_index("filename").loc[te.filename, "pred"].to_numpy()
+                     for k in range(N_SPLITS)], 0)
+        p = o.loc[folds.filename, "pred"].to_numpy()
+        return p, p, t
+
+    base["finetuned"] = fold_models(ROOT / "cache" / "ft")  # WavLM-large
+    alm = ROOT / "cache" / "alm"  # Qwen2-Audio-7B QLoRA, used only when all 5 folds exist
+    if all((alm / f"test_fold{k}.csv").exists() for k in range(N_SPLITS)):
+        base["audiollm"] = fold_models(alm)
 
     # transcript features
     F = pd.read_parquet(ROOT / "cache" / "feat_text.parquet")
@@ -102,7 +109,7 @@ def main():
     rows = [dict(model="mean baseline", cv_rmse=base_rmse, cv_pearson=0.0, train_rmse=base_rmse)]
     for n in names:
         rows.append(dict(model=n, cv_rmse=rmse(y, base[n][0]), cv_pearson=pearson(y, base[n][0]),
-                         train_rmse=rmse(y, base[n][1]) if n != "finetuned" else np.nan))
+                         train_rmse=rmse(y, base[n][1]) if n not in ("finetuned", "audiollm") else np.nan))
     rows.append(dict(model="STACK (final)", cv_rmse=rmse(y, st), cv_pearson=pearson(y, st), train_rmse=rmse(y, train_in)))
     res = pd.DataFrame(rows)
     fold_rmse = [rmse(y[fold == k], st[fold == k]) for k in range(N_SPLITS)]
