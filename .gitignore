@@ -42,3 +42,4 @@ mlruns/
 kaggle/transcribe/skip.txt
 kaggle/transcribe_b/
 kaggle/finetune/kernel.py
+kaggle/ft_alm/kernel.py
