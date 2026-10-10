@@ -58,3 +58,13 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
   - the bootstrap 95% interval of the gain is [0.0015, 0.017], so the gain is small but real;
   - a plain 50/50 average gives 0.513, so the gain does not depend on the fitted weights.
 - **Limits:** only one repeat (r0) was run, because of GPU cost. No in-sample training RMSE exists for the fine-tuned part, because there is no model trained on all clips; the test prediction averages the 5 fold models.
+
+## D9. Audio-LLM judge (Qwen2-Audio-7B): tried, dropped
+- **Setup:** Qwen2-Audio-7B-Instruct (Apache-2.0), 4-bit, one copy per T4. It listened to each clip (30 s windows) and was asked to rate grammar with the exact rubric. We read the probabilities of "1"-"5" and took the expected score. Two prompt wordings. 42 min on T4 x2.
+- **Result:** its scores correlate only **0.43** with the labels, much weaker than every trained branch. Added to the stack it changes CV RMSE by 0.0007 (better in 3/5 folds, bootstrap interval centred on 0), so it is **dropped**.
+- **Why it is weak (likely):** a general audio model, not trained on our rubric, gives coarse ratings, and its probabilities cluster around a few values. Our trained models learn the raters' actual scale from 769 examples. The judge is in the report as "tried, no gain".
+
+## D10. Final engine
+- **Branches:** frozen Whisper-large-v3 + WavLM-large embeddings with Ridge (weight 0.57), fine-tuned WavLM-large (0.35), transcript fluency/grammar features with Ridge (0.14), combined by a non-negative linear stack. Predictions are clipped to [0, 5].
+- **Numbers:** CV RMSE 0.500 and Pearson 0.915 on repeat r0. In-sample training RMSE 0.348 (the fine-tuned part uses its out-of-fold predictions).
+- **Why these three:** each one was kept only because it improved CV in most folds. Everything else (SVR, w2v-BERT, label-0 detector, LLM judge) was measured and dropped.
