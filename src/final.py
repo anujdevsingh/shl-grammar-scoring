@@ -4,6 +4,7 @@ Base models (out-of-fold predictions on repeat r0 of the fixed folds; fine-tunin
   frozen     Ridge on frozen Whisper-large-v3 + WavLM-large embeddings      (src/train_emb.py, e002)
   finetuned  WavLM-large fine-tuned on our scores, 5 fold models             (src/finetune.py)
   audiollm   Qwen2-Audio-7B fine-tuned with QLoRA, 5 fold models, if present (src/ft_alm.py)
+  adapter_*  adapter graders on frozen Whisper / WavLM frames, 5 folds x 3 seeds, if present (src/adapter.py)
   text       Ridge on fluency + grammar transcript features                  (src/train_text.py, e003)
   judge      Ridge on the Qwen2-Audio rubric-judge scores, if available      (src/judge.py)
 Stack: non-negative linear regression on the base predictions, evaluated fold by fold (fit on 4 folds, score the 5th).
@@ -81,6 +82,10 @@ def main():
     alm = ROOT / "cache" / "alm"  # Qwen2-Audio-7B QLoRA, used only when all 5 folds exist
     if all((alm / f"test_fold{k}.csv").exists() for k in range(N_SPLITS)):
         base["audiollm"] = fold_models(alm)
+    for enc in ("whisper", "wavlm"):  # adapter graders on frozen encoder frames (src/adapter.py), 3 seeds averaged
+        d = ROOT / "cache" / f"adapter_{enc}"
+        if all((d / f"test_fold{k}.csv").exists() for k in range(N_SPLITS)):
+            base[f"adapter_{enc}"] = fold_models(d)
 
     # transcript features
     F = pd.read_parquet(ROOT / "cache" / "feat_text.parquet")
@@ -120,7 +125,7 @@ def main():
     rows = [dict(model="mean baseline", cv_rmse=base_rmse, cv_pearson=0.0, train_rmse=base_rmse)]
     for n in names:
         rows.append(dict(model=n, cv_rmse=rmse(y, base[n][0]), cv_pearson=pearson(y, base[n][0]),
-                         train_rmse=rmse(y, base[n][1]) if n not in ("finetuned", "audiollm") else np.nan))
+                         train_rmse=rmse(y, base[n][1]) if n in ("frozen", "text", "judge") else np.nan))
     rows.append(dict(model="STACK (final)", cv_rmse=rmse(y, st), cv_pearson=pearson(y, st), train_rmse=rmse(y, train_in)))
     res = pd.DataFrame(rows)
     fold_rmse = [rmse(y[fold == k], st[fold == k]) for k in range(N_SPLITS)]
