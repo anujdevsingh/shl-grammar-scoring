@@ -91,3 +91,12 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
   - Random 20 s crops and masked spans as augmentation. 15 fixed epochs, 5 folds x 3 seeds averaged. 42 min in total on T4 x2.
 - **Result:** Whisper adapter **0.503** on 1-5 clips, our best single model (frozen Ridge 0.529, fine-tuned WavLM about 0.55). The WavLM adapter scored 0.537 and the stack gives it weight 0.
 - **Stack (e011):** 0.4857 vs e009 0.5011 on 1-5 clips. Better in 5/5 folds, bootstrap 95% interval of the gain [0.005, 0.025].
+
+## D14. e011: better CV, worse public leaderboard. What we did about it
+- **What happened:** e011 improved CV on 1-5 clips (0.5011 -> 0.4857, 5/5 folds), but its public leaderboard score is 0.3742 vs 0.3655 for e009. This is the first time CV and the leaderboard disagreed.
+- **Checks:**
+  - **Mean shift:** none (test mean 3.296 vs 3.310).
+  - **Clip length:** on train clips under 50 s, which are like most test clips, e011 is still better (0.549 vs 0.562).
+  - **Sampling noise:** if e011 is truly better, a random public subset of 65-108 test clips would make it look this much worse 3-8% of the time.
+- **Reading:** most likely noise in a small public split, but a real test-set difference cannot be ruled out.
+- **Decision:** do not tune on the public leaderboard (it uses roughly a third of 216 clips; CV uses 769). The 2 final submissions hedge both views: **e011** (best CV) and **e009** (best public score).
