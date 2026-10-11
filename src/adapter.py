@@ -14,6 +14,8 @@ Two steps:
            The seeds are averaged. Output in the same per-fold format as finetune.py.
            Short-clip options (round 2): --crop_min/--crop_max variable crop lengths, --dur_feat (clip length as an
            input to the head), --tta (average of full-clip and 20 s window scores).
+           Semi-supervised option (round 3): --pseudo_dir adds leakage-free pseudo-labelled clips (src/pseudo.py)
+           with loss weight --pseudo_w.
 
 Usage: python adapter.py extract --data DIR --out DIR --encoder whisper|wavlm [--model NAME] [--limit N]
        python adapter.py train --feats DIR --data DIR --folds folds.csv --out DIR --folds_to_run 0,1 [--seeds 3]
@@ -190,7 +192,13 @@ def train(a):
 
     logs = []
     for k in [int(v) for v in a.folds_to_run.split(",")]:
-        trn = tr[(tr.r0 != k) & (tr.label > 0)].reset_index(drop=True)  # learn the 1-5 scale only
+        trn = tr[(tr.r0 != k) & (tr.label > 0)].assign(split="train", w=1.0).reset_index(drop=True)  # 1-5 scale only
+        if a.pseudo_dir:  # semi-supervised: add pseudo-labelled held-out + test clips (no fold-k labels used)
+            ps = pd.read_csv(Path(a.pseudo_dir) / f"pseudo_fold{k}.csv").assign(w=a.pseudo_w)
+            ps = ps[[(s_, f_) in seq for s_, f_ in zip(ps.split, ps.filename)]]
+            trn = pd.concat([trn[["split", "filename", "label", "w"]], ps], ignore_index=True)
+            print(f"[{a.encoder}] fold {k}: {int((trn.w == 1).sum())} labelled + {len(ps)} pseudo-labelled clips "
+                  f"(weight {a.pseudo_w})", flush=True)
         val = tr[tr.r0 == k].reset_index(drop=True)
         vkeys, tkeys = [("train", f) for f in val.filename], [("test", f) for f in te.filename]
         pv_all, pt_all = [], []
@@ -205,9 +213,11 @@ def train(a):
                 order = trn.sample(frac=1, random_state=seed * 100 + ep)
                 for i in range(0, len(order), a.bs):
                     rows = order.iloc[i:i + a.bs]
-                    ks = [("train", f) for f in rows.filename]
+                    ks = list(zip(rows.split, rows.filename))
                     X, M = batch(ks, True)
-                    loss = nn.functional.mse_loss(model(X, M, dur_t(ks)), torch.tensor(rows.label.to_numpy(np.float32), device=dev))
+                    err = (model(X, M, dur_t(ks)) - torch.tensor(rows.label.to_numpy(np.float32), device=dev)) ** 2
+                    wt = torch.tensor(rows.w.to_numpy(np.float32), device=dev)
+                    loss = (wt * err).sum() / wt.sum()
                     opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
             pv = predict(model, vkeys)
             pv_all.append(pv); pt_all.append(predict(model, tkeys))
@@ -245,6 +255,8 @@ def main():
     ap.add_argument("--crop_max", type=float, default=20.0)
     ap.add_argument("--dur_feat", action="store_true", help="give the clip's true length to the head")
     ap.add_argument("--tta", action="store_true", help="average full-clip and 20 s window scores at prediction")
+    ap.add_argument("--pseudo_dir", default=None, help="folder with pseudo_fold{k}.csv (split, filename, label)")
+    ap.add_argument("--pseudo_w", type=float, default=0.5, help="loss weight of pseudo-labelled clips")
     a = ap.parse_args()
     a.model = a.model or {"whisper": "openai/whisper-large-v3", "wavlm": "microsoft/wavlm-large"}[a.encoder]
     extract(a) if a.cmd == "extract" else train(a)

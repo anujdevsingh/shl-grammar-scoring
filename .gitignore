@@ -45,3 +45,4 @@ kaggle/finetune/kernel.py
 kaggle/ft_alm/kernel.py
 kaggle/adapter/kernel.py
 kaggle/adapter2/kernel.py
+kaggle/adapter3/kernel.py
