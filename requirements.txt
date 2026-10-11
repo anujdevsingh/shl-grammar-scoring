@@ -21,3 +21,7 @@ sentence-transformers
 spacy
 language-tool-python
 shap
+jupytext
+pyarrow
+peft
+bitsandbytes  # GPU only (Kaggle), for the 4-bit audio LLM
