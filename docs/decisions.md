@@ -146,3 +146,9 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
   - Chance the fix beats e009's public 0.3655: "unlikely" (1.47/4).
 - **Round 4:** per-clip normalisation of the encoder frames (classic cepstral mean/variance normalisation) on top of the pseudo-labelled adapter, in two variants: mean only and mean + variance.
 - **Pass rule, set in advance and judged without the leaderboard:** CV on 1-5 clips no worse than e013 (0.479), test-like CV no worse than e013 (0.501), and disagreement ratio clearly closer to 1.0 than 1.10. If it passes, it replaces e013 as the second final pick.
+- **Round 4 result: failed, not submitted.**
+  - Stack CV on 1-5 clips: mean + variance 0.4916, mean only 0.4937, vs e013 0.4792. Worse in 5 of 5 folds; the bootstrap 95% interval of the gain is fully below 0.
+  - Test-like CV: 0.5099 and 0.5101 vs e013 0.5006. Worse on the clips most like the test set too.
+  - Disagreement ratio (vs the average of fine-tuned WavLM and audio-LLM): 1.05 and 1.03 vs e013 1.07. Only slightly closer to 1.0.
+  - Plain words: removing each recording's constant "colour" also removed useful signal, and it barely changed how differently the adapter treats the test set. So the colour was not the main cause of the drift.
+  - Decision: stop work on the adapter. Final picks stay e009 (best public score) + e013 (best CV).
