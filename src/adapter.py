@@ -16,6 +16,8 @@ Two steps:
            input to the head), --tta (average of full-clip and 20 s window scores).
            Semi-supervised option (round 3): --pseudo_dir adds leakage-free pseudo-labelled clips (src/pseudo.py)
            with loss weight --pseudo_w.
+           Robustness option (round 4): --cmvn mean|meanvar normalises each clip's frames over time, removing constant
+           recording-condition offsets (classic cepstral mean/variance normalisation applied to encoder features).
 
 Usage: python adapter.py extract --data DIR --out DIR --encoder whisper|wavlm [--model NAME] [--limit N]
        python adapter.py train --feats DIR --data DIR --folds folds.csv --out DIR --folds_to_run 0,1 [--seeds 3]
@@ -128,7 +130,13 @@ def train(a):
                      shape=(int(ix.len.sum()), int(ix.L[0]), int(ix.d[0])))
     starts = np.r_[0, np.cumsum(ix.len.to_numpy())[:-1]]
     seq = {(s, f): (st, n) for s, f, st, n in zip(ix.split, ix.filename, starts, ix.len)}
-    get = lambda key: np.asarray(flat[seq[key][0]:seq[key][0] + seq[key][1]], dtype=np.float32)
+    def get(key):
+        x = np.asarray(flat[seq[key][0]:seq[key][0] + seq[key][1]], dtype=np.float32)  # (T, L, d)
+        if a.cmvn != "none":  # per-clip normalisation: removes a constant device/room "colour" from each recording
+            x = x - x.mean(0, keepdims=True)
+            if a.cmvn == "meanvar":
+                x = x / (x.std(0, keepdims=True) + 1e-5)
+        return x
     tr = pd.read_csv(data / "train.csv").merge(pd.read_csv(a.folds)[["filename", "r0"]], on="filename")
     tr = tr[[("train", f) in seq for f in tr.filename]]
     te = pd.read_csv(data / "test.csv")
@@ -257,6 +265,8 @@ def main():
     ap.add_argument("--tta", action="store_true", help="average full-clip and 20 s window scores at prediction")
     ap.add_argument("--pseudo_dir", default=None, help="folder with pseudo_fold{k}.csv (split, filename, label)")
     ap.add_argument("--pseudo_w", type=float, default=0.5, help="loss weight of pseudo-labelled clips")
+    ap.add_argument("--cmvn", choices=["none", "mean", "meanvar"], default="none",
+                    help="per-clip normalisation of the frames over time (round 4: robustness to recording conditions)")
     a = ap.parse_args()
     a.model = a.model or {"whisper": "openai/whisper-large-v3", "wavlm": "microsoft/wavlm-large"}[a.encoder]
     extract(a) if a.cmd == "extract" else train(a)
