@@ -12,6 +12,8 @@ Two steps:
            About 1M trainable parameters. Training uses random 20 s crops and random frame masking as augmentation,
            trains on scores 1-5 only (the test set has no invalid label-0 clips), and runs a FIXED 15 epochs.
            The seeds are averaged. Output in the same per-fold format as finetune.py.
+           Short-clip options (round 2): --crop_min/--crop_max variable crop lengths, --dur_feat (clip length as an
+           input to the head), --tta (average of full-clip and 20 s window scores).
 
 Usage: python adapter.py extract --data DIR --out DIR --encoder whisper|wavlm [--model NAME] [--limit N]
        python adapter.py train --feats DIR --data DIR --folds folds.csv --out DIR --folds_to_run 0,1 [--seeds 3]
@@ -94,23 +96,25 @@ def extract(a):
 
 
 class AdapterGrader(nn.Module):
-    def __init__(self, n_layers, d_in, init_bias, d=128):
+    def __init__(self, n_layers, d_in, init_bias, d=128, dur_feat=False):
         super().__init__()
+        self.dur_feat = dur_feat
         self.adapters = nn.ModuleList(nn.Sequential(nn.LayerNorm(d_in), nn.Linear(d_in, d), nn.GELU(), nn.Linear(d, d))
                                       for _ in range(n_layers))
         self.proj = nn.Linear(n_layers * d, d)
         self.tf = nn.TransformerEncoderLayer(d, 4, 2 * d, dropout=0.1, batch_first=True)
-        self.head = nn.Sequential(nn.Linear(2 * d, d), nn.GELU(), nn.Dropout(0.1), nn.Linear(d, 1))
+        self.head = nn.Sequential(nn.Linear(2 * d + int(dur_feat), d), nn.GELU(), nn.Dropout(0.1), nn.Linear(d, 1))
         nn.init.constant_(self.head[-1].bias, init_bias)
 
-    def forward(self, x, mask):  # x: (B, T, L, d_in); mask: (B, T) True = real frame
+    def forward(self, x, mask, dur=None):  # x: (B, T, L, d_in); mask: (B, T) True = real frame; dur: (B,) seconds
         h = self.proj(torch.cat([ad(x[:, :, i]) for i, ad in enumerate(self.adapters)], -1))
         h = self.tf(h, src_key_padding_mask=~mask)
         m = mask.unsqueeze(-1).float()
         n = m.sum(1).clamp(min=1)
         mu = (h * m).sum(1) / n
         sd = (((h - mu.unsqueeze(1)) ** 2 * m).sum(1) / n).clamp(min=1e-6).sqrt()
-        return self.head(torch.cat([mu, sd], -1)).squeeze(-1)
+        z = torch.cat([mu, sd] + ([torch.log(dur).unsqueeze(-1) - 3.9] if self.dur_feat else []), -1)  # log(50 s) ~ 3.9
+        return self.head(z).squeeze(-1)
 
 
 def train(a):
@@ -128,13 +132,16 @@ def train(a):
     te = pd.read_csv(data / "test.csv")
     te = te[[("test", f) in seq for f in te.filename]]
     L, d_in = flat.shape[1], flat.shape[2]
-    crop = int(20 * SR / 320 / POOL)  # 20 s in 80 ms steps
+    step_s = 320 * POOL / SR  # seconds per cached step (0.08 s)
+    crop_lo, crop_hi = int(a.crop_min / step_s), int(a.crop_max / step_s)
+    clip_dur = {key: n * step_s for key, (_, n) in seq.items()}  # true length of each recording, in seconds
 
     def batch(keys, training):
         xs = [get(k) for k in keys]
         if training:
             out_ = []
             for x in xs:
+                crop = np.random.randint(crop_lo, crop_hi + 1)  # variable-length crops (8-40 s by default)
                 if len(x) > crop:
                     s = np.random.randint(0, len(x) - crop + 1)
                     x = x[s:s + crop]
@@ -152,15 +159,34 @@ def train(a):
             X[i, :len(x)], M[i, :len(x)] = x, True
         return torch.tensor(X, device=dev), torch.tensor(M, device=dev)
 
+    def dur_t(keys):
+        return torch.tensor([clip_dur[k] for k in keys], dtype=torch.float32, device=dev)
+
     @torch.no_grad()
     def predict(model, keys):
+        """Full clip; with --tta also the mean over 20 s windows (hop 10 s), averaged with the full-clip score."""
         model.eval()
         p = []
         for i in range(0, len(keys), 16):
-            X, M = batch(keys[i:i + 16], False)
-            p.append(model(X, M).float().cpu().numpy())
+            ks = keys[i:i + 16]
+            X, M = batch(ks, False)
+            p.append(model(X, M, dur_t(ks)).float().cpu().numpy())
+        p = np.concatenate(p)
+        if a.tta:
+            w, hop = int(20 / step_s), int(10 / step_s)
+            tta = []
+            for k in keys:
+                x = get(k)
+                wins = [x[s:s + w] for s in range(0, max(1, len(x) - w + 1), hop)] or [x]
+                T = max(len(v) for v in wins)
+                X = np.zeros((len(wins), T, L, d_in), np.float32); M = np.zeros((len(wins), T), bool)
+                for j, v in enumerate(wins):
+                    X[j, :len(v)], M[j, :len(v)] = v, True
+                d = torch.full((len(wins),), clip_dur[k], device=dev)
+                tta.append(float(model(torch.tensor(X, device=dev), torch.tensor(M, device=dev), d).mean()))
+            p = (p + np.array(tta)) / 2
         model.train()
-        return np.concatenate(p)
+        return p
 
     logs = []
     for k in [int(v) for v in a.folds_to_run.split(",")]:
@@ -170,7 +196,7 @@ def train(a):
         pv_all, pt_all = [], []
         for seed in range(a.seeds):
             torch.manual_seed(seed); np.random.seed(seed)
-            model = AdapterGrader(L, d_in, float(trn.label.mean())).to(dev)
+            model = AdapterGrader(L, d_in, float(trn.label.mean()), dur_feat=a.dur_feat).to(dev)
             opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.01)
             steps = a.epochs * math.ceil(len(trn) / a.bs)
             sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 0.5 * (1 + math.cos(math.pi * min(1.0, s / steps))))
@@ -179,8 +205,9 @@ def train(a):
                 order = trn.sample(frac=1, random_state=seed * 100 + ep)
                 for i in range(0, len(order), a.bs):
                     rows = order.iloc[i:i + a.bs]
-                    X, M = batch([("train", f) for f in rows.filename], True)
-                    loss = nn.functional.mse_loss(model(X, M), torch.tensor(rows.label.to_numpy(np.float32), device=dev))
+                    ks = [("train", f) for f in rows.filename]
+                    X, M = batch(ks, True)
+                    loss = nn.functional.mse_loss(model(X, M, dur_t(ks)), torch.tensor(rows.label.to_numpy(np.float32), device=dev))
                     opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step(); sched.step()
             pv = predict(model, vkeys)
             pv_all.append(pv); pt_all.append(predict(model, tkeys))
@@ -214,6 +241,10 @@ def main():
     ap.add_argument("--epochs", type=int, default=15)
     ap.add_argument("--bs", type=int, default=8)
     ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument("--crop_min", type=float, default=20.0, help="training crop length range in seconds")
+    ap.add_argument("--crop_max", type=float, default=20.0)
+    ap.add_argument("--dur_feat", action="store_true", help="give the clip's true length to the head")
+    ap.add_argument("--tta", action="store_true", help="average full-clip and 20 s window scores at prediction")
     a = ap.parse_args()
     a.model = a.model or {"whisper": "openai/whisper-large-v3", "wavlm": "microsoft/wavlm-large"}[a.encoder]
     extract(a) if a.cmd == "extract" else train(a)
