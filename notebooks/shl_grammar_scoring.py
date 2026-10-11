@@ -12,34 +12,36 @@
 
 # %% [markdown]
 # # Spoken Grammar Scoring Engine
-# **SHL Hiring Assessment 2026 · Anuj Dev Singh**
+# SHL Hiring Assessment 2026, Anuj Dev Singh
 #
-# **Task.** Given a 45–60 s recording of someone speaking English, predict the grammar score (0–5, steps of 0.5)
-# that a human rater gave using SHL's rubric. 769 scored training clips, 216 test clips. Metrics: RMSE and Pearson.
+# The task: given a 45-60 s recording of someone speaking English, predict the grammar score (0 to 5, in steps of
+# 0.5) that a human rater gave using SHL's rubric. There are 769 scored training clips and 216 test clips, and the
+# metrics are RMSE and Pearson correlation.
 #
-# **Approach in one paragraph.** A rater *hears* the speech, so the engine scores the audio directly and uses the
-# transcript as a second view. Five branches each predict a score:
-# 1. **Frozen encoders + Ridge:** Whisper-large-v3 and WavLM-large turn each clip into one vector.
-# 2. **Fine-tuned WavLM-large.**
-# 3. **Fine-tuned audio LLM:** Qwen2-Audio-7B with QLoRA and a regression head.
-# 4. **Adapter grader:** small adapters and one Transformer layer on frozen Whisper frames, trained with
-#    leakage-free pseudo-labels.
-# 5. **Transcript features:** fluency and grammar measures from Whisper transcripts.
+# A rater listens to the speech, so I score the audio directly and use the transcript as a second source of
+# information. Five models each predict a score:
+# 1. Frozen Whisper-large-v3 and WavLM-large encoders turn each clip into one vector, and a Ridge regression maps it
+#    to a score.
+# 2. WavLM-large fine-tuned on the scores.
+# 3. Qwen2-Audio-7B fine-tuned with QLoRA and a regression head.
+# 4. An adapter grader: small adapters and one Transformer layer on frozen Whisper frames, trained with pseudo-labels
+#    that cannot leak into validation.
+# 5. Fluency and grammar features from Whisper transcripts.
 #
-# A non-negative linear stack, fitted on out-of-fold predictions, combines them. The test set contains no invalid
-# recordings, so the models learn from scores 1–5, and a simple rule keeps invalid-looking clips near 0.
+# A non-negative linear stack, fitted on out-of-fold predictions, combines them. The test set has no invalid
+# recordings, so the models learn from scores 1-5, and a simple rule keeps invalid-looking clips near 0.
 #
-# **Two final submissions** (Kaggle allows two):
-# - **e013:** all five branches. Best cross-validation.
-# - **e009:** branches 1, 2, 3 and 5, without the adapter. Best public leaderboard score.
+# Kaggle allows two final submissions, and I picked these:
+# - e013 uses all five models and has the best cross-validation score.
+# - e009 leaves out the adapter and has the best public leaderboard score.
 #
-# Section 4 explains why both are kept. Every number below comes from the same fixed cross-validation folds.
+# Section 6 explains why I kept both. Every number in this notebook comes from the same fixed CV folds.
 #
-# **Contents.** 1 Data · 2 Preprocessing · 3 Branches and stack · 4 Results (training RMSE, CV RMSE, Pearson)
-# · 5 Visualisations · 6 CV vs leaderboard · 7 Error analysis, limitations, what failed · 8 Reproduce
+# Contents: 1 Data, 2 Preprocessing, 3 Models and stack, 4 Results (training RMSE, CV RMSE, Pearson),
+# 5 Visualisations, 6 CV vs leaderboard, 7 Error analysis and what failed, 8 Reproduce.
 #
-# *Note: the competition data is for competition use only. This notebook shows aggregate numbers and plots only.
-# It never prints audio, transcripts or per-file rows.*
+# The competition data is for competition use only, so this notebook only shows aggregate numbers and plots. It
+# never prints audio, transcripts or per-file rows.
 
 # %%
 import json
@@ -61,13 +63,13 @@ BLUE, ORANGE, GREY, GREEN = "#2f6db5", "#e07b39", "#8c8c8c", "#3a9a5b"
 
 # %% [markdown]
 # ## 1. Data
-# - **Labels are skewed toward higher scores.**
-# - **37 clips are scored 0,** below the rubric's 1. A check with Whisper showed these are invalid recordings: high
-#   no-speech probability, low ASR confidence, often not confidently English.
-# - **The test set has none of them.** No test clip looks invalid to a detector that catches all 37 in train.
-# - **Test clips are shorter** (median 45 s vs 60 s) and slightly quieter.
-# - **The test recordings also differ in other ways:** a classifier tells train from test clips with AUC 0.84
-#   (section 6).
+# The labels lean towards higher scores. 37 clips are scored 0, which is below the rubric's lowest level of 1. When I
+# checked them with Whisper they turned out to be invalid recordings: high no-speech probability, low ASR confidence,
+# and often not clearly English. The test set has none of these; a detector that catches all 37 in train flags no
+# test clip.
+#
+# The test clips are also shorter (median 45 s against 60 s) and a bit quieter, and they differ in other ways too:
+# a classifier can tell train clips from test clips with AUC 0.84 (more on this in section 6).
 
 # %%
 train = pd.read_csv(DATA / "train.csv")
@@ -89,50 +91,43 @@ plt.show()
 
 # %% [markdown]
 # ## 2. Preprocessing
-# - **No resampling needed.** All files are already 16 kHz mono 16-bit, with no clipping and no duplicate files.
-# - **Loudness (RMS) normalisation** to about −20 dBFS, so quiet test clips match train. RMS rather than peak, so
-#   one click cannot set the scale.
-# - **No silence trimming.** Pauses and hesitations are part of what raters hear.
-# - **30 s windows.** Whisper's encoder reads at most 30 s, so clips are cut into 30 s windows. For the frozen
-#   vectors, the pooled windows are averaged, weighted by length, and padding frames are ignored.
-# - **Length-free transcript features.** Every count is per second or per word, and raw duration and word counts
-#   are excluded, because test clips are shorter.
+# All files are already 16 kHz mono 16-bit, with no clipping and no duplicates, so nothing needs resampling. I
+# normalise loudness (RMS) to about -20 dBFS so the quieter test clips match train; I use RMS rather than peak so a
+# single click cannot set the scale. I do not trim silence, because pauses and hesitations are part of what the
+# rater hears. Whisper's encoder reads at most 30 s, so clips are cut into 30 s windows, and for the frozen vectors
+# the windows are averaged by length with padding frames ignored. Because test clips are shorter, every transcript
+# count is per second or per word, and raw duration and word counts are left out.
 #
-# ## 3. Branches and stack
-# | Branch | What it captures | Model |
+# ## 3. Models and stack
+# | Model | What it captures | How it is trained |
 # |---|---|---|
-# | **Frozen audio** | Whisper-large-v3 encoder + WavLM-large: mean and std over time of every layer, averaged per model | Standardise → RidgeCV |
-# | **Fine-tuned WavLM** | WavLM-large trained end to end on the scores: 20 s random crops, 8 fixed epochs, learned layer weights + small MLP head | 5 fold models |
-# | **Fine-tuned audio LLM** | Qwen2-Audio-7B in 4-bit, LoRA rank 16 on the language model, plus a regression head reading the last prompt token. Rubric prompt + 30 s audio; 3 fixed epochs | 5 fold models |
-# | **Adapter grader** (e013 only) | Frozen Whisper-large-v3 frames from layers 16/22/27/32, every 80 ms. Per-layer adapters (LayerNorm → Linear 1280→128 → GELU → Linear), one Transformer layer, mean + std pooling, MLP head. About 1M trainable parameters. 20 s crops + masked spans, 15 fixed epochs, 3 seeds. Also learns from pseudo-labels (below) | 5 fold models × 3 seeds |
-# | **Transcript** | faster-whisper large-v3 transcripts, prompted to keep "um" and restarts. 42 features: pauses, speech rate, fillers, ASR confidence, vocabulary variety, LanguageTool errors per 100 words, GPT-2 likelihood, syntax depth, clauses | Standardise → RidgeCV |
-# | **Stack** | how much to trust each branch | Non-negative linear regression on out-of-fold predictions, then clipped to [0, 5] |
+# | Frozen audio | Whisper-large-v3 encoder + WavLM-large: mean and std over time of every layer, averaged per model | Standardise -> RidgeCV |
+# | Fine-tuned WavLM | WavLM-large trained end to end on the scores: 20 s random crops, 8 epochs, learned layer weights and a small MLP head | 5 fold models |
+# | Fine-tuned audio LLM | Qwen2-Audio-7B in 4-bit, LoRA rank 16 on the language model, a regression head on the last prompt token. Rubric prompt + 30 s of audio, 3 epochs | 5 fold models |
+# | Adapter grader (e013 only) | Frozen Whisper-large-v3 frames from layers 16/22/27/32, every 80 ms. Per-layer adapters (LayerNorm, Linear 1280 to 128, GELU, Linear), one Transformer layer, mean + std pooling, MLP head; about 1M trainable parameters. 20 s crops with masked spans, 15 epochs, 3 seeds, plus pseudo-labels | 5 fold models x 3 seeds |
+# | Transcript | faster-whisper large-v3, prompted to keep "um" and restarts. 42 features: pauses, speech rate, fillers, ASR confidence, vocabulary variety, LanguageTool errors per 100 words, GPT-2 likelihood, syntax depth, clauses | Standardise -> RidgeCV |
+# | Stack | how much to trust each model | Non-negative linear regression on out-of-fold predictions, clipped to [0, 5] |
 #
-# **Why an adapter grader?**
-# - The frozen Ridge branch averages over time *before* learning anything, so a short event such as a broken
-#   sentence is averaged away.
-# - The adapter learns from frame-level features first and pools afterwards.
-# - This was the best single model of the winning Speak & Improve 2025 system, and it is also our best single model.
+# Why an adapter grader? The frozen Ridge model averages over time before it learns anything, so a short event
+# like a broken sentence gets averaged away. The adapter looks at the frame-level features first and pools
+# afterwards. It was the best single model in the winning Speak & Improve 2025 system, and it is my best single
+# model here too.
 #
-# **Pseudo-labels without leakage.** For fold k, a "teacher" built only from models that never saw fold k's labels
-# scores fold k's clips and the 216 test clips. The adapter then trains on the real labels of the other folds,
-# plus these pseudo-labels at half weight, and is scored on fold k's *real* labels. This lets it learn from
-# recordings like the test ones without leaking any label into its own validation score.
+# The pseudo-labels are built so they cannot leak. For fold k, a teacher made only from models that never saw fold
+# k's labels scores fold k's clips and the 216 test clips. The adapter then trains on the real labels of the other
+# folds plus these pseudo-labels at half weight, and it is scored on fold k's real labels. That way it gets to learn
+# from recordings like the test ones without seeing any label it is later judged on.
 #
-# **Scores 1–5 plus an invalid-audio rule** (e013):
-# - Ridge models and the stack train on the 732 clips scored 1–5, because the test set has no invalid clips.
-# - One frozen model trained on *all* clips acts as a detector. If it predicts below 1.0, that low score is kept.
-# - In cross-validation this rule catches all 37 label-0 clips and no test clip.
+# For e013, the Ridge models and the stack train on the 732 clips scored 1-5, since the test set has no invalid
+# clips. A separate frozen model trained on all clips acts as a detector: if it predicts below 1.0, that low score
+# is kept. In CV this catches all 37 label-0 clips and no test clip.
 #
-# **Validation:**
-# - Stratified 5-fold CV, with folds fixed once and reused for every model.
-# - Fine-tuning ran on repeat 0 only (one fine-tuned model costs 1–4 GPU-hours per fold), so every comparison uses
-#   repeat 0.
-# - The stack is itself cross-validated: its weights are fitted on 4 folds and scored on the 5th.
-# - **Decision rule for adding anything:** better on at least 4 of 5 folds, and a bootstrap 95% interval of the
-#   gain above 0.
+# For validation I use stratified 5-fold CV with the folds fixed once and reused everywhere. Fine-tuning only ran on
+# repeat 0 (one fine-tuned model costs 1-4 GPU-hours per fold), so every comparison uses repeat 0. The stack is
+# cross-validated too: its weights are fitted on 4 folds and scored on the fifth. I only added something if it
+# improved at least 4 of the 5 folds and the bootstrap 95% interval of the gain was above 0.
 #
-# Example of what the transcript features measure, on a **made-up** sentence (not competition data):
+# Here is what the transcript features look for, on a made-up sentence (not competition data):
 
 # %%
 import spacy  # noqa: E402
@@ -147,16 +142,17 @@ print("subordinate clauses:", [t.text for t in doc if t.dep_ in {"advcl", "ccomp
 
 # %% [markdown]
 # ## 4. Results
-# - **Training RMSE (in-sample):** every refittable model (Ridge branches, stack) is refit on all 769 clips and
-#   scored on those same clips. It is optimistic by design.
-# - **CV RMSE / Pearson:** each clip is predicted by a model that never saw it. This is the honest estimate.
-# - **Fine-tuned and adapter branches have no all-data model.** Their test prediction averages the 5 fold models.
-#   So inside the stack's training RMSE, their out-of-fold predictions are used.
-#   - In e013 the adapter carries most of the stack weight, so its "in-sample" figure is close to its CV figure.
-#     That is expected, not a leak.
+# Training RMSE (in-sample) means refitting every model that can be refit (the Ridge models and the stack) on all
+# 769 clips and scoring those same clips, so it is optimistic by design. CV RMSE and Pearson come from predicting
+# each clip with a model that never saw it, which is the fair estimate.
 #
-# Base-model rows are scored on the 732 clips rated 1–5, which is what the test set looks like. The stack row
-# also shows all 769 clips.
+# The fine-tuned and adapter models have no version trained on all the data; their test prediction is the average of
+# the 5 fold models. So when computing the stack's training RMSE, their out-of-fold predictions stand in. In e013 the
+# adapter carries most of the stack weight, which is why its in-sample number ends up close to its CV number. That
+# is expected and not a leak.
+#
+# The rows for individual models are scored on the 732 clips rated 1-5, because that is what the test set looks
+# like. The stack line also gives the result on all 769 clips.
 
 # %%
 def results(exp):
@@ -184,16 +180,16 @@ def results(exp):
 d13, d09 = results(FINAL), results(ALT)
 
 # %% [markdown]
-# **Summary of the two final submissions:**
+# Side by side:
 #
-# | | Training RMSE (in-sample) | CV RMSE (all clips) | CV Pearson (all clips) | CV RMSE (1–5 clips) | Public LB RMSE |
+# | | Training RMSE (in-sample) | CV RMSE (all clips) | CV Pearson (all clips) | CV RMSE (1-5 clips) | Public LB RMSE |
 # |---|---|---|---|---|---|
-# | Mean baseline | 1.238 | 1.238 | 0.000 | – | 1.0050 |
-# | **e009** (no adapter) | 0.370 | 0.492 | 0.918 | 0.501 | **0.3655** |
-# | **e013** (with adapter) | 0.443 | **0.470** | **0.925** | **0.479** | 0.3757 |
+# | Mean baseline | 1.238 | 1.238 | 0.000 | - | 1.0050 |
+# | e009 (no adapter) | 0.370 | 0.492 | 0.918 | 0.501 | 0.3655 |
+# | e013 (with adapter) | 0.443 | 0.470 | 0.925 | 0.479 | 0.3757 |
 #
-# e013 is better than e009 on all 5 CV folds. e009 is better on the public leaderboard. Section 6 explains why
-# both are kept.
+# e013 beats e009 on all 5 CV folds, while e009 is better on the public leaderboard. Section 6 explains why I kept
+# both.
 
 # %% [markdown]
 # ## 5. Visualisations
@@ -207,7 +203,7 @@ ax[0].plot([0, 5], [0, 5], color=GREY, lw=1, ls="--")
 ax[0].set(title=f"e013 out-of-fold vs true (Pearson {pearson(y, st):.3f})", xlabel="true score", ylabel="predicted")
 ax[1].scatter(st, st - y, s=8, alpha=0.45, color=BLUE)
 ax[1].axhline(0, color=GREY, lw=1, ls="--")
-ax[1].set(title="Residuals", xlabel="predicted", ylabel="predicted − true")
+ax[1].set(title="Residuals", xlabel="predicted", ylabel="predicted - true")
 w = 0.18
 for off, dd, c, lab in [(-w, d09, ORANGE, "e009"), (w, d13, BLUE, "e013")]:
     g = pd.DataFrame(dict(y=dd["y"], e2=(dd["stack_oof"] - dd["y"]) ** 2)).groupby("y")
@@ -221,9 +217,8 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# **How the adapter improved, fold by fold** (RMSE on 1–5 clips; lower is better):
-# - The adapter beats the frozen Ridge it replaces as the main signal in every fold.
-# - Pseudo-labelling improves it again in every fold.
+# How the adapter improved, fold by fold (RMSE on 1-5 clips, lower is better). It beats the frozen Ridge model in
+# every fold, and the pseudo-labels improve it again in every fold.
 
 # %%
 folds = get_folds()
@@ -250,12 +245,10 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# **Which encoder layers matter?**
-# - For both encoders, averaging all layers beats any third of the layers alone.
-# - The early layers are the weakest, so the score depends on higher-level information about words and structure,
-#   not only on raw sound.
-# - Newer is not automatically better: frozen w2v-BERT 2.0 (2023, 4.5 M hours of pre-training) was the weakest
-#   encoder.
+# Which encoder layers matter? For both encoders, averaging all the layers beats any third of them on its own, and
+# the early layers are the weakest. So the score depends on higher-level information about words and structure,
+# not only on the raw sound. Newer isn't automatically better either: frozen w2v-BERT 2.0 (2023, 4.5M hours of
+# pre-training) was the weakest of the three.
 
 # %%
 lg = pd.read_csv(CACHE / "e005_results.csv")
@@ -269,9 +262,9 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# **Fine-tuning curves:** validation RMSE per epoch for each fold.
-# - The numbers of epochs (8 for WavLM, 3 for the audio LLM) were fixed in advance.
-# - No epoch was picked by looking at these curves, so the out-of-fold scores stay honest.
+# Fine-tuning curves: validation RMSE per epoch for each fold. I fixed the number of epochs in advance (8 for WavLM,
+# 3 for the audio LLM) and never picked an epoch by looking at these curves, so the out-of-fold scores are not
+# tuned on the validation data.
 
 # %%
 fig, ax = plt.subplots(1, 2, figsize=(11, 3.2))
@@ -285,11 +278,10 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# **What the transcript features say:**
-# - The strongest single signals are Whisper's own **word confidence** and **vocabulary variety**.
-# - The direct grammar measures (LanguageTool error rate, GPT-2 likelihood, syntax) are weaker.
-# - Whisper rewrites disfluent, ungrammatical speech into clean text, so many errors never reach the transcript.
-#   This is why the audio branches carry most of the weight.
+# What the transcript features show: the strongest single signals are Whisper's own word confidence and vocabulary
+# variety, while the direct grammar measures (LanguageTool error rate, GPT-2 likelihood, syntax) are weaker. Whisper
+# tends to rewrite hesitant, ungrammatical speech into clean text, so many errors never make it into the transcript.
+# That's why the audio models carry most of the weight.
 
 # %%
 F = pd.read_parquet(CACHE / "feat_text.parquet")
@@ -306,9 +298,9 @@ plt.show()
 
 # %% [markdown]
 # ## 6. CV vs leaderboard: why two final submissions
-# - **Up to e009, the public leaderboard moved in the same direction as CV every time.**
-# - **Every submission with the adapter grader was better in CV but worse on the public leaderboard:**
-#   e011 0.3742, e012 0.3790 and e013 0.3757, vs e009 0.3655.
+# Up to e009, the public leaderboard moved the same way as CV every time. After that, every submission with the
+# adapter grader scored better in CV but worse on the public leaderboard: e011 0.3742, e012 0.3790 and e013 0.3757,
+# against 0.3655 for e009.
 
 # %%
 lb = pd.DataFrame([
@@ -331,49 +323,52 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# **What was checked, without using the leaderboard:**
-# - **Small public split.** The public score uses roughly a third of the 216 test clips. If e011 were truly
-#   better, a random subset that size would make it look this much worse 3–8% of the time. Unlikely, but possible.
-# - **Train/test shift is real.** A classifier separates train from test clips with AUC 0.84.
-#   - On the 25% of train clips that look most like test, e013 still beats e009 (0.501 vs 0.525).
-#   - Re-weighting training toward test-like clips did not help: only 49 of 732 clips carry real weight.
-# - **Disagreement test** (no labels needed): how far each model's predictions sit from the other models', on test
-#   vs on train.
-#   - The fine-tuned models behave the same on test as on train (ratios 0.90–0.95).
-#   - The adapters drift away on test (1.10–1.27).
-#   - So the adapter reacts to something in the test recordings that CV cannot see.
-# - **One targeted fix, judged by a rule set in advance:** per-clip normalisation of the encoder frames (classic
-#   cepstral mean/variance normalisation) removes each recording's constant microphone or room "colour".
-#   - It made CV worse on all 5 folds (0.492–0.494 vs 0.479) and on test-like clips.
-#   - It barely changed the drift (1.03–1.05 vs 1.07).
-#   - So it was not adopted.
+# Here is what I checked without using the leaderboard.
 #
-# **Decision:**
-# - Do not tune on the public leaderboard: it uses about 70 clips, while CV uses 769.
-# - Keep both views as the two final submissions:
-#   - **e013**, best on every CV check;
-#   - **e009**, best public score, and it does not use the adapter whose behaviour on test is less certain.
+# The public score is based on roughly a third of the 216 test clips. If e011 really were better, a random subset
+# that size would make it look this much worse 3-8% of the time. That's unlikely, but possible.
+#
+# The train/test shift is real: a classifier separates train from test clips with AUC 0.84. On the 25% of train
+# clips that look most like test, e013 still beats e009 (0.501 vs 0.525). Re-weighting the training towards those
+# test-like clips didn't help, because only about 49 of the 732 clips end up carrying real weight.
+#
+# I also ran a disagreement test, which needs no labels: how far each model's predictions sit from the other
+# models', on test compared with train. The fine-tuned models behave the same on both (ratios 0.90-0.95), but the
+# adapters drift away on test (1.10-1.27). So the adapter is reacting to something in the test recordings that CV
+# cannot see.
+#
+# I tried one targeted fix, with the pass rule written down before the run: per-clip normalisation of the encoder
+# frames (the classic cepstral mean/variance normalisation), which removes each recording's constant microphone or
+# room "colour". It made CV worse on all 5 folds (0.492-0.494 vs 0.479) and on the test-like clips, and it barely
+# changed the drift (1.03-1.05 vs 1.07), so I did not use it.
+#
+# My decision was not to tune on the public leaderboard, which uses about 70 clips while CV uses 769, and to keep one
+# submission for each view: e013, which is best on every CV check, and e009, which has the best public score and
+# doesn't depend on the adapter's less certain behaviour on test.
 
 # %% [markdown]
 # ## 7. Error analysis, limitations, and what failed
-# - **Squeezing toward the middle.** Low scores are predicted too high and 5s too low (see "RMSE by true score").
-#   Scores 1.0–1.5 have only 4 training clips, so the model has almost no examples of the bottom of the scale.
-# - **Short clips are harder.** On train clips under 50 s, which are like most test clips, the error is higher
-#   (e013: 0.545 vs 0.456 on longer clips).
-#   - Training the adapter on variable-length crops with clip length as an input did not change that.
-#   - So short clips are not hard because of a length mismatch; they are probably harder recordings or speakers.
-# - **What ASR cannot see.** Whisper cleans up grammar errors, so transcript-based grammar features are weak. The
-#   audio branches do not have this problem, but they also respond to fluency and confidence, not grammar alone.
-# - **Small data.** About 585 training clips per fold. Fine-tuning a large model alone does *not* beat frozen
-#   features (fine-tuned WavLM 0.550 and audio LLM 0.597 vs frozen Ridge 0.521). They help as second opinions in
-#   the stack.
+# Predictions get squeezed towards the middle: low scores come out too high and 5s too low (see the RMSE by true
+# score plot). Scores 1.0-1.5 have only 4 training clips, so the model has almost no examples of the bottom of the
+# scale.
 #
-# **Tried and dropped** (measured, kept for transparency; details in `docs/decisions.md`):
+# Short clips are harder. On train clips under 50 s, which are like most of the test set, e013's error is 0.545
+# against 0.456 on longer clips. Training the adapter on variable-length crops with the clip length as an input did
+# not change this, so short clips are probably harder recordings or speakers rather than a length mismatch.
+#
+# ASR hides grammar errors. Whisper cleans them up, so the transcript-based grammar features are weak. The audio
+# models don't have that problem, but they also pick up fluency and confidence, not only grammar.
+#
+# The data is small, about 585 training clips per fold. Fine-tuning a large model on its own does not beat the
+# frozen features (fine-tuned WavLM 0.550 and the audio LLM 0.597, against 0.521 for frozen Ridge); both are useful
+# only as extra opinions in the stack.
+#
+# Things I tried and dropped (all measured; details in `docs/decisions.md`):
 #
 # | Idea | Result |
 # |---|---|
 # | SVR instead of Ridge | 0.523 vs 0.524, no gain |
-# | Frozen w2v-BERT 2.0 added | 0.520 vs 0.524, within noise |
+# | Adding frozen w2v-BERT 2.0 | 0.520 vs 0.524, within noise |
 # | Zero-shot Qwen2-Audio rubric judge | correlation with labels only 0.43; +0.0007 in the stack |
 # | WavLM adapter | weight 0 in the stack |
 # | Short-clip-aware adapter (round 2) | +0.002, bootstrap interval includes 0 |
@@ -401,6 +396,6 @@ plt.show()
 # python src/final.py --exp e013 --no-judge --nz --drop adapter_whisper,adapter2_whisper,adapter4mean_whisper,adapter4meanvar_whisper
 # python src/final.py --exp e009 --no-judge --drop adapter_whisper,adapter_wavlm,adapter2_whisper,adapter3_whisper,adapter4mean_whisper,adapter4meanvar_whisper
 # ```
-# - Both final commands were re-run from the cached branch outputs and reproduce the submitted files exactly.
-# - Heavy stages write checkpoints, so a dropped Kaggle session can resume.
-# - This notebook only reads the cached results in `cache/`.
+# I re-ran both final commands from the cached model outputs and they give back the submitted files exactly.
+# The heavy stages write checkpoints, so a dropped Kaggle session can resume,
+# and this notebook only reads the cached results in `cache/`.

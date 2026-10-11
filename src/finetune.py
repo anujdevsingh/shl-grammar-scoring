@@ -7,7 +7,7 @@ Model:  WavLM-large (MIT) -> learned weighted sum of all hidden layers -> mean o
         The convolutional front-end stays frozen; the transformer layers are trained with a small learning rate,
         the head with a larger one.
 Train:  random 20 s crops (data augmentation and fits T4 memory), MSE loss, fp16, AdamW, cosine schedule,
-        a FIXED number of epochs (no early stopping on the validation fold, so out-of-fold scores stay honest).
+        a FIXED number of epochs (no early stopping on the validation fold, so out-of-fold scores are not tuned on validation data).
 Eval:   the whole clip.
 CV:     the same fixed folds as every other model (repeat r0). One process per fold; folds are spread over GPUs.
 Output per fold: oof_fold{k}.csv (validation predictions), test_fold{k}.csv, log_fold{k}.csv (per-epoch metrics).

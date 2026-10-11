@@ -6,7 +6,7 @@ Base models (same fixed folds as everything else):
 - audio:      the M2 audio-embedding Ridge (Whisper-large-v3 + WavLM-large, all layers).
 Stack: a linear regression with non-negative weights on the base models' out-of-fold predictions.
 It is evaluated with the same folds (meta-model fitted on the training part of each fold only), so the stack
-score is honest. Final test prediction: base models fitted on all train, combined with the stack weights.
+score is fair. Final test prediction: base models fitted on all train, combined with the stack weights.
 
 Usage: python src/train_text.py [--exp e003]
 """
