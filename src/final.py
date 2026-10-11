@@ -106,7 +106,7 @@ def main():
             f"{c} {pearson(y, J[J.split == 'train'].set_index('filename').loc[folds.filename, c]):.3f}"
             for c in ["judge_rubric", "judge_short"]))
     for d in filter(None, a.drop.split(",")):
-        base.pop(d)
+        base.pop(d, None)
 
     names = list(base)
     P = np.c_[[base[n][0] for n in names]].T

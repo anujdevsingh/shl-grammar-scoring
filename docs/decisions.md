@@ -119,3 +119,14 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
 - **Simple average of the 4 strongest audio models:** worse than the fitted stack on all three views (0.494 / 0.543 / 0.521). Not adopted.
 - **TabPFN (tabular foundation model):** versions 2.5 and later are non-commercial, so they are not allowed under the competition's licence rule. Not used.
 - **Reading:** the e011-vs-e009 public-LB disagreement is not explained by anything our features can see. Most likely it is public-subset noise, or a shift outside the audio embeddings. Final selection stays e011 + e009 as a hedge.
+
+## D17. Pseudo-labelling (semi-supervised self-training): small but real gain
+- **Why:** the test recordings differ from train (adversarial AUC 0.84). Pseudo-labelling lets the model also learn from unlabelled clips that look like the ones it must score.
+- **Leakage-free setup (src/pseudo.py):**
+  - For fold k, the teacher is built only from models that never saw fold k's labels: the fold-k models, plus stack weights fitted on the other folds.
+  - The teacher labels fold k's clips (treated as unlabelled) and the 216 test clips.
+  - The student is the Whisper adapter with round-1 settings. It trains on the real labels plus these pseudo-labels at half weight and is scored on fold k's real labels. CV on fold k and prediction on test therefore follow the same recipe.
+- **Result:**
+  - The student alone is **better than its own teacher**: 0.481 vs the e011 stack's 0.486 on 1-5 clips, and better than the round-1 adapter (0.503) in all 5 folds.
+  - In the stack (e013): **0.4792 vs 0.4857**. Better in 5/5 folds, bootstrap 95% interval of the gain [0.002, 0.011]. Also better on test-like clips (0.501 vs 0.506) and short clips (0.545 vs 0.549).
+- **Caveat:** the gain is modest and the test predictions correlate 0.998 with e011, so the leaderboard can only move a little. The stack now relies mostly on the student (weight 0.77), which itself learned from all the other branches.
