@@ -100,3 +100,12 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
   - **Sampling noise:** if e011 is truly better, a random public subset of 65-108 test clips would make it look this much worse 3-8% of the time.
 - **Reading:** most likely noise in a small public split, but a real test-set difference cannot be ruled out.
 - **Decision:** do not tune on the public leaderboard (it uses roughly a third of 216 clips; CV uses 769). The 2 final submissions hedge both views: **e011** (best CV) and **e009** (best public score).
+
+## D15. Short-clip-aware adapter (round 2): no real gain, not submitted
+- **Hypothesis:** short clips (< 50 s; 69% of test) are harder (RMSE about 0.58 vs 0.47) because the adapter only saw fixed 20 s crops.
+- **Change:** variable 8-40 s training crops, clip length as an input, averaging full-clip and 20 s window scores at prediction, and 5 seeds.
+- **Result:**
+  - Alone it is slightly better overall (0.498 vs 0.503), but all of that gain is on long clips.
+  - Short clips are unchanged (0.586 vs 0.585). So short clips are not hard because of a length mismatch; they are probably harder recordings or speakers.
+  - In the stack it replaces round 1, but the gain (0.0024, bootstrap interval includes 0) is within noise, and the test predictions correlate 0.999 with e011.
+- **Decision:** keep e011 as the final engine. The round-2 code stays in the repo as a documented, measured attempt.
