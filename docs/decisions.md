@@ -109,3 +109,13 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
   - Short clips are unchanged (0.586 vs 0.585). So short clips are not hard because of a length mismatch; they are probably harder recordings or speakers.
   - In the stack it replaces round 1, but the gain (0.0024, bootstrap interval includes 0) is within noise, and the test predictions correlate 0.999 with e011.
 - **Decision:** keep e011 as the final engine. The round-2 code stays in the repo as a documented, measured attempt.
+
+## D16. Classical tools for train/test shift: adversarial validation and importance weighting
+- **Adversarial validation:** a logistic regression on the audio embeddings separates 1-5 train clips from test clips with **AUC 0.836**, so the test set is clearly different. Clip length explains only part of it (correlation -0.45 with test-likeness).
+- **Re-scoring on test-like train clips:** on the 25% of train clips that look most like test, e011 still beats e009 (0.506 vs 0.525). The same holds on the top 50% (0.492 vs 0.511). So the CV preference for e011 survives a test-like view.
+- **Importance weighting (p(test|x)/p(train|x), clipped):**
+  - The effective sample size is only 49 of 732 clips, so very few train clips resemble test.
+  - A stack fitted with these weights is worse on the test-like 25% (0.514 vs 0.506) and on all clips. Not adopted.
+- **Simple average of the 4 strongest audio models:** worse than the fitted stack on all three views (0.494 / 0.543 / 0.521). Not adopted.
+- **TabPFN (tabular foundation model):** versions 2.5 and later are non-commercial, so they are not allowed under the competition's licence rule. Not used.
+- **Reading:** the e011-vs-e009 public-LB disagreement is not explained by anything our features can see. Most likely it is public-subset noise, or a shift outside the audio embeddings. Final selection stays e011 + e009 as a hedge.
