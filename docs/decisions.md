@@ -130,3 +130,19 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
   - The student alone is **better than its own teacher**: 0.481 vs the e011 stack's 0.486 on 1-5 clips, and better than the round-1 adapter (0.503) in all 5 folds.
   - In the stack (e013): **0.4792 vs 0.4857**. Better in 5/5 folds, bootstrap 95% interval of the gain [0.002, 0.011]. Also better on test-like clips (0.501 vs 0.506) and short clips (0.545 vs 0.549).
 - **Caveat:** the gain is modest and the test predictions correlate 0.998 with e011, so the leaderboard can only move a little. The stack now relies mostly on the student (weight 0.77), which itself learned from all the other branches.
+
+## D18. Is the leaderboard drop adapter-specific? Disagreement test and second review
+- **Label-free test:** for each model, compare how far its predictions are from the other models' average, on test vs on train (OOF).
+  - Fine-tuned WavLM (0.95) and audio-LLM (0.90) behave the same on test as on train.
+  - The round-1 Whisper adapter drifts away from the others on test by **1.27x**, the WavLM adapter by 1.14x, and the pseudo-labelled adapter by 1.10x.
+  - So the adapter reacts to something in the test recordings. This fits its worse public scores despite better CV.
+- **Second review (Jev, full context):**
+  - Adapter-specific cause, not just noise: 0.76.
+  - A more robust adapter is plausible and worth one test: 0.75.
+  - The disagreement ratio is a valid diagnostic: 0.73.
+  - Stop probing the public leaderboard: 0.77.
+  - The e009 + e013 hedge is sound: 0.62.
+  - Best first fix: per-clip normalisation (0.55) over domain-adversarial training (0.41).
+  - Chance the fix beats e009's public 0.3655: "unlikely" (1.47/4).
+- **Round 4:** per-clip normalisation of the encoder frames (classic cepstral mean/variance normalisation) on top of the pseudo-labelled adapter, in two variants: mean only and mean + variance.
+- **Pass rule, set in advance and judged without the leaderboard:** CV on 1-5 clips no worse than e013 (0.479), test-like CV no worse than e013 (0.501), and disagreement ratio clearly closer to 1.0 than 1.10. If it passes, it replaces e013 as the second final pick.

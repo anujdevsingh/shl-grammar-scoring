@@ -83,8 +83,9 @@ def main():
     if all((alm / f"test_fold{k}.csv").exists() for k in range(N_SPLITS)):
         base["audiollm"] = fold_models(alm)
     # adapter graders on frozen encoder frames (src/adapter.py); adapter2 = round 2 (short-clip aware, 5 seeds),
-    # adapter3 = round 3 (pseudo-labelled)
-    for name in ("adapter_whisper", "adapter_wavlm", "adapter2_whisper", "adapter3_whisper"):
+    # adapter3 = round 3 (pseudo-labelled), adapter4* = round 4 (pseudo-labelled + per-clip normalisation)
+    for name in ("adapter_whisper", "adapter_wavlm", "adapter2_whisper", "adapter3_whisper",
+                 "adapter4meanvar_whisper", "adapter4mean_whisper"):
         d = ROOT / "cache" / name
         if all((d / f"test_fold{k}.csv").exists() for k in range(N_SPLITS)) and name not in a.drop.split(","):
             base[name] = fold_models(d)
