@@ -68,3 +68,10 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
 - **Branches:** frozen Whisper-large-v3 + WavLM-large embeddings with Ridge (weight 0.57), fine-tuned WavLM-large (0.35), transcript fluency/grammar features with Ridge (0.14), combined by a non-negative linear stack. Predictions are clipped to [0, 5].
 - **Numbers:** CV RMSE 0.500 and Pearson 0.915 on repeat r0. In-sample training RMSE 0.348 (the fine-tuned part uses its out-of-fold predictions).
 - **Why these three:** each one was kept only because it improved CV in most folds. Everything else (SVR, w2v-BERT, label-0 detector, LLM judge) was measured and dropped.
+
+## D11. Fine-tuning an audio LLM (Qwen2-Audio-7B, QLoRA): kept
+- **Why:** zero-shot, the audio LLM was weak (D9). Published work shows the same model improves sharply once fine-tuned on proficiency scores (Pearson 0.64 -> 0.95, arXiv 2505.21148).
+- **Setup:** the 7B model in 4-bit, with LoRA adapters (rank 16, 40M trainable parameters, 0.5% of the model) on the language model and a small regression head reading the last prompt token. Random 30 s windows, 3 fixed epochs, one fold per T4. About 2.5 h per fold.
+- **Test first:** it ran on folds 0-1 only, with the rule set in advance: continue only if it improves the stack in both folds. It did (+0.010, +0.008), so the remaining 3 folds were run.
+- **Alone:** CV RMSE 0.597 / Pearson 0.877. Weaker than the frozen (0.521) and fine-tuned WavLM (0.550) models. With only 615 clips per fold, the 7B model overfits after 2-3 epochs (train MSE 0.28 vs val about 0.35).
+- **Stacked:** it makes different mistakes, so the stack improves from **0.5003 to 0.4916**. It is better in 5/5 folds, and the bootstrap 95% interval of the gain is [0.0018, 0.016], so the gain is real. Stack weights: frozen 0.46, fine-tuned WavLM 0.28, audio LLM 0.25, text 0.08.
