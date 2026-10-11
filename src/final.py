@@ -32,13 +32,15 @@ from train_text import ridge_fp  # noqa: E402
 from validate import validate_submission  # noqa: E402
 
 
-def oof_and_full(fp, Xtr, y, Xte, fold):
-    """Out-of-fold predictions on r0, plus in-sample train and test predictions from a model fit on all train."""
+def oof_and_full(fp, Xtr, y, Xte, fold, use=None):
+    """Out-of-fold predictions on r0, plus in-sample train and test predictions from a model fit on all train.
+    use: boolean mask of training clips the model may learn from (default all); predictions are made for every clip."""
+    use = np.ones(len(y), bool) if use is None else use
     oof = np.zeros(len(y))
     for k in range(N_SPLITS):
         va = fold == k
-        oof[va] = fp(Xtr[~va], y[~va], Xtr[va])
-    return oof, fp(Xtr, y, Xtr), fp(Xtr, y, Xte)
+        oof[va] = fp(Xtr[~va & use], y[~va & use], Xtr[va])
+    return oof, fp(Xtr[use], y[use], Xtr), fp(Xtr[use], y[use], Xte)
 
 
 def main():
@@ -46,20 +48,25 @@ def main():
     ap.add_argument("--exp", default="final")
     ap.add_argument("--no-judge", action="store_true")
     ap.add_argument("--drop", default="")
+    ap.add_argument("--nz", action="store_true",
+                    help="train Ridge models and stack on scores 1-5 only (the test set has no invalid label-0 clips); "
+                         "a clip the all-clips frozen model scores below 1.0 keeps that low score")
     a = ap.parse_args()
     folds = get_folds()
     tr, te = pd.read_csv(DATA / "train.csv"), pd.read_csv(DATA / "test.csv")
     y = tr.set_index("filename").loc[folds.filename, "label"].to_numpy()
     fold = folds.r0.to_numpy()
     base = {}  # name -> (oof, in-sample train, test)
+    use = (y > 0) if a.nz else np.ones(len(y), bool)
 
     # frozen audio embeddings
     emb = ROOT / "cache" / "emb"
     order = pd.read_csv(emb / "emb_order.csv")
     idx = {(s, f): i for i, (f, s) in enumerate(zip(order.filename, order.split))}
     A = np.hstack([np.load(emb / f"emb_{t}.npy").astype(np.float32)[:, 1:].mean(1) for t in ["whisper", "wavlm"]])
-    base["frozen"] = oof_and_full(emb_fp, A[[idx[("train", f)] for f in folds.filename]], y,
-                                  A[[idx[("test", f)] for f in te.filename]], fold)
+    Atr, Ate = A[[idx[("train", f)] for f in folds.filename]], A[[idx[("test", f)] for f in te.filename]]
+    detector = oof_and_full(emb_fp, Atr, y, Ate, fold)  # all clips: knows what invalid (label-0) audio looks like
+    base["frozen"] = oof_and_full(emb_fp, Atr, y, Ate, fold, use) if a.nz else detector
 
     # fine-tuned models (5 fold models each): OOF from each fold's model; test = mean of the 5 models.
     # No all-data model exists, so the in-sample slot uses the OOF predictions.
@@ -79,7 +86,7 @@ def main():
     F = pd.read_parquet(ROOT / "cache" / "feat_text.parquet")
     cols = [c for c in F.columns if c not in ("split", "filename", "duration", "n_words", "n_sents")]
     base["text"] = oof_and_full(ridge_fp, F[F.split == "train"].set_index("filename").loc[folds.filename, cols].to_numpy(float), y,
-                                F[F.split == "test"].set_index("filename").loc[te.filename, cols].to_numpy(float), fold)
+                                F[F.split == "test"].set_index("filename").loc[te.filename, cols].to_numpy(float), fold, use)
 
     # audio-LLM judge
     jp = ROOT / "cache" / "judge" / "judge.csv"
@@ -99,11 +106,15 @@ def main():
     st = np.zeros(len(y))
     for k in range(N_SPLITS):
         va = fold == k
-        st[va] = LinearRegression(positive=True).fit(P[~va], y[~va]).predict(P[va])
-    meta = LinearRegression(positive=True).fit(P, y)
-    st = np.clip(st, 0, 5)
-    train_in = np.clip(meta.predict(np.c_[[base[n][1] for n in names]].T), 0, 5)
-    test = np.clip(meta.predict(np.c_[[base[n][2] for n in names]].T), 0, 5)
+        st[va] = LinearRegression(positive=True).fit(P[~va & use], y[~va & use]).predict(P[va])
+    meta = LinearRegression(positive=True).fit(P[use], y[use])
+    train_in = meta.predict(np.c_[[base[n][1] for n in names]].T)
+    test = meta.predict(np.c_[[base[n][2] for n in names]].T)
+    if a.nz:  # invalid-audio rule
+        st, train_in, test = [np.where(d < 1.0, d, p) for d, p in zip(detector, (st, train_in, test))]
+        print("clips sent to the invalid-audio rule: train OOF %d (of %d label-0), test %d"
+              % ((detector[0] < 1.0).sum(), (y == 0).sum(), (detector[2] < 1.0).sum()))
+    st, train_in, test = [np.clip(v, 0, 5) for v in (st, train_in, test)]
 
     base_rmse = rmse(y, np.full_like(y, y.mean()))
     rows = [dict(model="mean baseline", cv_rmse=base_rmse, cv_pearson=0.0, train_rmse=base_rmse)]
@@ -115,6 +126,9 @@ def main():
     fold_rmse = [rmse(y[fold == k], st[fold == k]) for k in range(N_SPLITS)]
     print(res.round(4).to_string(index=False))
     print("stack per-fold RMSE:", np.round(fold_rmse, 4))
+    nz = y > 0
+    print(f"STACK on clips 1-5 only (what the test set looks like): CV RMSE {rmse(y[nz], st[nz]):.4f}  "
+          f"Pearson {pearson(y[nz], st[nz]):.4f}")
     w = dict(zip(names, map(float, meta.coef_)))
     print("stack weights:", {k: round(v, 3) for k, v in w.items()}, "intercept %.3f" % meta.intercept_)
 
