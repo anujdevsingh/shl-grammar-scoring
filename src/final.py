@@ -82,8 +82,9 @@ def main():
     alm = ROOT / "cache" / "alm"  # Qwen2-Audio-7B QLoRA, used only when all 5 folds exist
     if all((alm / f"test_fold{k}.csv").exists() for k in range(N_SPLITS)):
         base["audiollm"] = fold_models(alm)
-    # adapter graders on frozen encoder frames (src/adapter.py); adapter2 = round 2 (short-clip aware, 5 seeds)
-    for name in ("adapter_whisper", "adapter_wavlm", "adapter2_whisper"):
+    # adapter graders on frozen encoder frames (src/adapter.py); adapter2 = round 2 (short-clip aware, 5 seeds),
+    # adapter3 = round 3 (pseudo-labelled)
+    for name in ("adapter_whisper", "adapter_wavlm", "adapter2_whisper", "adapter3_whisper"):
         d = ROOT / "cache" / name
         if all((d / f"test_fold{k}.csv").exists() for k in range(N_SPLITS)) and name not in a.drop.split(","):
             base[name] = fold_models(d)
