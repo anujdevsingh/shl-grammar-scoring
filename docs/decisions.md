@@ -75,3 +75,19 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
 - **Test first:** it ran on folds 0-1 only, with the rule set in advance: continue only if it improves the stack in both folds. It did (+0.010, +0.008), so the remaining 3 folds were run.
 - **Alone:** CV RMSE 0.597 / Pearson 0.877. Weaker than the frozen (0.521) and fine-tuned WavLM (0.550) models. With only 615 clips per fold, the 7B model overfits after 2-3 epochs (train MSE 0.28 vs val about 0.35).
 - **Stacked:** it makes different mistakes, so the stack improves from **0.5003 to 0.4916**. It is better in 5/5 folds, and the bootstrap 95% interval of the gain is [0.0018, 0.016], so the gain is real. Stack weights: frozen 0.46, fine-tuned WavLM 0.28, audio LLM 0.25, text 0.08.
+
+## D12. Test set has no invalid clips; train for scores 1-5
+- **Evidence:**
+  - Our all-clips model predicts the 37 label-0 training clips at about 0.1, but its lowest test prediction is 1.82.
+  - The leaderboard RMSE of the constant baseline (1.005) matches the spread of train labels *without* the zeros (std 1.01), not with them (1.24).
+  - A rule "keep the score if the all-clips model says below 1.0" catches 37/37 label-0 train clips and 0/216 test clips.
+- **Change:** the Ridge models, the adapters and the stack weights are trained on scores 1-5 only. CV is reported on 1-5 clips as the test-like number, and the rule stays as a safety net.
+
+## D13. Adapter grader on frozen encoder frames (Speak & Improve 2025 winner's recipe): biggest single gain
+- **Why:** the winning S&I 2025 system's best single model was a frozen Whisper encoder with small trainable per-frame adapters (RMSE 0.363 vs their BERT text grader 0.396). Our Ridge branch averages over time *before* learning anything, so short events such as a broken sentence are averaged away.
+- **Setup:**
+  - Whisper-large-v3 layers 16/22/27/32, frames averaged into 80 ms steps and cached once.
+  - Per-layer adapters (LayerNorm, Linear 1280->128, GELU, Linear), concatenated, then one small Transformer layer, then mean + std over time, then an MLP. About 1M trainable parameters.
+  - Random 20 s crops and masked spans as augmentation. 15 fixed epochs, 5 folds x 3 seeds averaged. 42 min in total on T4 x2.
+- **Result:** Whisper adapter **0.503** on 1-5 clips, our best single model (frozen Ridge 0.529, fine-tuned WavLM about 0.55). The WavLM adapter scored 0.537 and the stack gives it weight 0.
+- **Stack (e011):** 0.4857 vs e009 0.5011 on 1-5 clips. Better in 5/5 folds, bootstrap 95% interval of the gain [0.005, 0.025].
