@@ -152,3 +152,15 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
   - Disagreement ratio (vs the average of fine-tuned WavLM and audio-LLM): 1.05 and 1.03 vs e013 1.07. Only slightly closer to 1.0.
   - In other words, removing each recording's constant "colour" also removed useful signal, and it barely changed how differently the adapter treats the test set. So the colour was not the main cause of the drift.
   - Decision: stop work on the adapter. Final picks stay e009 (best public score) + e013 (best CV).
+
+## D19. Speaker check: the same voices repeat in train, and our CV folds leaked them
+- Why we looked: a public write-up for this competition grouped clips by voice, and our adapter was always better in CV but worse on the leaderboard.
+- How: ECAPA-TDNN speaker embeddings (SpeechBrain, Apache-2.0), one 192-number voice vector per clip, then clustering by cosine similarity (src/speaker.py, src/speaker_check.py).
+- What we found:
+  - Train voices repeat a lot. The median train clip has a nearest neighbour at cosine 0.91. At a strict threshold (0.7), 551 of 732 scored train clips share a voice with another train clip.
+  - Scores barely change within one voice: within-voice label std 0.17 against 0.97 overall; a clip's score correlates 0.90 with the mean score of the same voice's other clips.
+  - Test voices are new. The nearest train clip for a test clip has median similarity 0.52, and at 0.7 no test clip shares a voice with train. 56 test clips share a voice with another test clip.
+  - Our random folds split 187 of 208 repeated train voices across folds, so a model could score a validation clip by recognising the voice.
+- How much this inflated CV (frozen Ridge, clips 1-5): RMSE 0.529 with random folds vs 0.622 with speaker-grouped folds. The text Ridge barely moves (0.763 vs 0.781), because transcripts do not carry the voice.
+- Reading: our CV rewarded voice memory, and the stack weights were fitted on leaky predictions. This is the most likely reason the adapter (stack weight 0.77) looked best in CV but not on the leaderboard, where every voice is new.
+- Speaker-grouped folds saved in cache/folds_speaker.csv (StratifiedGroupKFold, voices clustered at cosine 0.7).
