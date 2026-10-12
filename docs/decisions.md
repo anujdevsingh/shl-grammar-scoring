@@ -164,3 +164,9 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
 - How much this inflated CV (frozen Ridge, clips 1-5): RMSE 0.529 with random folds vs 0.622 with speaker-grouped folds. The text Ridge barely moves (0.763 vs 0.781), because transcripts do not carry the voice.
 - Reading: our CV rewarded voice memory, and the stack weights were fitted on leaky predictions. This is the most likely reason the adapter (stack weight 0.77) looked best in CV but not on the leaderboard, where every voice is new.
 - Speaker-grouped folds saved in cache/folds_speaker.csv (StratifiedGroupKFold, voices clustered at cosine 0.7).
+
+## D20. e016: the engine chosen on speaker-grouped folds is our best public score
+- What: audio Ridge on late layers (Whisper 29-32, WavLM 17-24) + transcript encoders (DeBERTa-v3-large, RoBERTa-large, 42 features) + Qwen2.5-7B-Instruct transcript states (layers 16/19/22), each Ridge with alpha chosen by inner speaker-grouped CV; non-negative stack on grouped folds; same-voice smoothing 0.5 on test clips that share a voice.
+- Grouped CV (1-5 clips): RMSE 0.525, Pearson 0.856, leaderboard formula 0.373 (old frozen + text features on the same folds: 0.431).
+- Public leaderboard: 0.3507, our best (e009 0.3655, e013 0.3757). Rank 63 of 434 at submission time.
+- Reading: choosing models on folds where every voice is new (like the test set) moved the leaderboard the right way for the first time since e009. The fine-tuned models and the adapter are not in e016 yet; their saved predictions come from leaky folds and must be re-run on grouped folds before the stack can weigh them fairly.
