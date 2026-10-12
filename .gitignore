@@ -49,3 +49,4 @@ kaggle/adapter3/kernel.py
 kaggle/adapter4/kernel.py
 kaggle/adapter5/kernel.py
 kaggle/llm_text/kernel.py
+kaggle/finetune_g/kernel.py

@@ -73,6 +73,7 @@ def main():
     ap.add_argument("--lr_head", type=float, default=1e-3)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--nz", action="store_true", help="train on scores 1-5 only (the test set has no invalid audio)")
     a = ap.parse_args()
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
     dev = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
@@ -85,6 +86,8 @@ def main():
     if a.limit:
         tr, te = tr.head(a.limit), te.head(4)
     trn, val = tr[tr.r0 != a.fold].reset_index(drop=True), tr[tr.r0 == a.fold].reset_index(drop=True)
+    if a.nz:
+        trn = trn[trn.label > 0].reset_index(drop=True)
     print(f"fold {a.fold}: train {len(trn)} val {len(val)} test {len(te)} | device {dev}", flush=True)
     audio = {("train", f): load(data / "train" / f) for f in tr.filename}
     audio |= {("test", f): load(data / "test" / f) for f in te.filename}
