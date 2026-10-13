@@ -8,7 +8,7 @@ Stack: non-negative linear regression on the grouped out-of-fold predictions. Te
 of its 5 fold models. Then same-voice smoothing: clips whose ECAPA voice vectors match (cosine > 0.7) are pulled
 halfway to their voice's mean prediction. Finally clip to [0, 5]. (The test set has no invalid audio, D12.)
 
-Usage: python src/final_grouped.py [--exp e016] [--smooth 0.5]
+Usage: python src/final_grouped.py [--exp e016] [--smooth 0.5] [--fold_models cache/adapter5_run/adapter5_whisper]
 """
 import argparse
 import json
@@ -35,6 +35,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exp", default="e016")
     ap.add_argument("--smooth", type=float, default=0.5)
+    ap.add_argument("--fold_models", default="", help="comma list of folders with grouped-fold oof_fold{k}.csv / "
+                    "test_fold{k}.csv (e.g. cache/adapter5_run/adapter5_whisper); test = mean of the 5 fold models")
     a = ap.parse_args()
     folds, te = get_folds(), pd.read_csv(DATA / "test.csv")
     ktr = [("train", f) for f in folds.filename]
@@ -74,6 +76,15 @@ def main():
         base[name] = (oof, test)
         s, rm, r = metric(y[use], oof[use])
         print(f"{name:9s} grouped CV (1-5): RMSE {rm:.4f} r {r:.4f} metric {s:.4f}  alphas {np.round(al).astype(int).tolist()}")
+
+    for d in filter(None, a.fold_models.split(",")):
+        d = ROOT / d
+        o = pd.concat([pd.read_csv(d / f"oof_fold{k}.csv") for k in range(5)]).set_index("filename")
+        t = np.mean([pd.read_csv(d / f"test_fold{k}.csv").set_index("filename").loc[te.filename, "pred"].to_numpy()
+                     for k in range(5)], 0)
+        base[d.name] = (o.loc[folds.filename, "pred"].to_numpy(), t)
+        s, rm, r = metric(y[use], base[d.name][0][use])
+        print(f"{d.name:9s} grouped CV (1-5): RMSE {rm:.4f} r {r:.4f} metric {s:.4f}  (fold models)")
 
     names = list(base)
     P = np.c_[[base[n][0] for n in names]].T
