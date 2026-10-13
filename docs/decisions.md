@@ -170,3 +170,9 @@ Each entry: what was chosen, why, what else was considered, and what it gained (
 - Grouped CV (1-5 clips): RMSE 0.525, Pearson 0.856, leaderboard formula 0.373 (old frozen + text features on the same folds: 0.431).
 - Public leaderboard: 0.3507, our best (e009 0.3655, e013 0.3757). Rank 63 of 434 at submission time.
 - Reading: choosing models on folds where every voice is new (like the test set) moved the leaderboard the right way for the first time since e009. The fine-tuned models and the adapter are not in e016 yet; their saved predictions come from leaky folds and must be re-run on grouped folds before the stack can weigh them fairly.
+
+## D21. Augmentation and fine-tuned text (e018, e019)
+- Length-matched crop augmentation (e018): 3 random 40-50 s crops per train clip for the frozen audio Ridge. Worse alone (0.423 vs 0.419) and in the stack (2/5 folds), even on short clips. Not adopted: the full-clip average is already length-stable, and a crop can miss part of what the label scored.
+- Fine-tuned DeBERTa-v3-large on transcripts (speaker-grouped folds, 4 fixed epochs, 3 seeds): best single model on new voices (0.417). With the grouped Whisper adapter, the stack (e019) is better than e016 in 5/5 grouped folds (0.366 vs 0.373; bootstrap 95% of gain [0.0005, 0.0126]).
+- Public leaderboard: e019 0.3532 vs e016 0.3507. A 0.0025 difference on about 70 public clips is well inside noise; the two submissions correlate 0.993 on test.
+- Final selection: e019 (best grouped CV) + e016 (best public score). Both are chosen on speaker-grouped folds; the private leaderboard (about two thirds of test) is judged closer to CV than to the public subset.
