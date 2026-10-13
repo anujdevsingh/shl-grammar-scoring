@@ -1,4 +1,4 @@
-# Spoken Grammar Scoring Engine (SHL Hiring Assessment 2026)
+# Spoken Grammar Scoring Engine
 
 This project predicts a grammar score from 0 to 5 for a 45-60 second recording of spoken English, the same score a human rater would give using SHL's rubric.
 
