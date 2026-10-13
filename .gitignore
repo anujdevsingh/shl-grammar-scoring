@@ -51,3 +51,4 @@ kaggle/adapter5/kernel.py
 kaggle/llm_text/kernel.py
 kaggle/finetune_g/kernel.py
 kaggle/ft_text/kernel.py
+kaggle/ctc_text/kernel.py
