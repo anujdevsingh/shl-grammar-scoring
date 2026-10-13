@@ -22,7 +22,7 @@ from sklearn.linear_model import LinearRegression
 
 sys.path.insert(0, str(Path(__file__).parent))
 from cv import DATA, ROOT, get_folds  # noqa: E402
-from grouped import grouped_folds, grouped_oof, metric  # noqa: E402
+from grouped import grouped_folds, grouped_oof, grouped_ridge_fp, metric  # noqa: E402
 from validate import validate_submission  # noqa: E402
 
 
@@ -72,8 +72,10 @@ def main():
 
     base = {}
     for name, fn in [("audio", audio), ("enc_text", enc_text), ("qwen7b", qwen7b)]:
-        oof, test, al = grouped_oof(fn(ktr), y, fold, spk, use, fn(kte))
-        base[name] = (oof, test)
+        Xtr = fn(ktr)
+        oof, test, al = grouped_oof(Xtr, y, fold, spk, use, fn(kte))
+        train_in = grouped_ridge_fp(Xtr[use], y[use], Xtr, spk[use])[0]  # refit on all scored clips, predict them
+        base[name] = (oof, test, train_in)
         s, rm, r = metric(y[use], oof[use])
         print(f"{name:9s} grouped CV (1-5): RMSE {rm:.4f} r {r:.4f} metric {s:.4f}  alphas {np.round(al).astype(int).tolist()}")
 
@@ -82,7 +84,8 @@ def main():
         o = pd.concat([pd.read_csv(d / f"oof_fold{k}.csv") for k in range(5)]).set_index("filename")
         t = np.mean([pd.read_csv(d / f"test_fold{k}.csv").set_index("filename").loc[te.filename, "pred"].to_numpy()
                      for k in range(5)], 0)
-        base[d.name] = (o.loc[folds.filename, "pred"].to_numpy(), t)
+        p = o.loc[folds.filename, "pred"].to_numpy()
+        base[d.name] = (p, t, p)  # no all-data model: the in-sample slot uses the out-of-fold predictions
         s, rm, r = metric(y[use], base[d.name][0][use])
         print(f"{d.name:9s} grouped CV (1-5): RMSE {rm:.4f} r {r:.4f} metric {s:.4f}  (fold models)")
 
@@ -95,6 +98,9 @@ def main():
         st[va] = LinearRegression(positive=True).fit(P[~va & use], y[~va & use]).predict(P[va])
     meta = LinearRegression(positive=True).fit(P[use], y[use])
     test = meta.predict(Pt)
+    train_in = np.clip(meta.predict(np.c_[[base[n][2] for n in names]].T), 0, 5)
+    tr_rmse = float(np.sqrt(np.mean((train_in[use] - y[use]) ** 2)))
+    print(f"training RMSE (in-sample, 1-5 clips): {tr_rmse:.4f}  (fold-model branches use their OOF predictions)")
 
     # same-voice smoothing: train side uses the grouped-fold voice ids, test side clusters the test voices
     E = np.load(ROOT / "cache" / "speaker_emb.npy")
@@ -124,10 +130,11 @@ def main():
     pd.DataFrame({"filename": te.filename, "label": test_s}).to_csv(out, index=False)
     validate_submission(out)
     s, rm, r = metric(y[use], st_s[use])
-    np.savez(ROOT / "cache" / f"final_{a.exp}.npz", y=y, fold=fold, spk=spk, stack_oof=st_s, test=test_s,
+    np.savez(ROOT / "cache" / f"final_{a.exp}.npz", y=y, fold=fold, spk=spk, stack_oof=st_s, test=test_s, train_in=train_in,
              names=np.array(names), P=P, Pt=Pt)
     json.dump(dict(exp=a.exp, weights=w, intercept=float(meta.intercept_), smooth=a.smooth, grouped_metric=s,
-                   grouped_rmse=rm, grouped_pearson=r), open(ROOT / "cache" / f"final_{a.exp}.json", "w"), indent=1)
+                   grouped_rmse=rm, grouped_pearson=r, train_rmse=tr_rmse,
+                   branch_cv={n: dict(zip(("metric", "rmse", "pearson"), metric(y[use], base[n][0][use]))) for n in names}), open(ROOT / "cache" / f"final_{a.exp}.json", "w"), indent=1)
     print("wrote", out)
 
 

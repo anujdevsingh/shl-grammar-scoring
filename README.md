@@ -4,72 +4,72 @@ This project predicts a grammar score from 0 to 5 for a 45-60 second recording o
 
 Author: Anuj Dev Singh
 
-## Approach
-A rater listens to the speech, so I score the audio directly and use the transcript as a second source of information. Five models each predict a score:
+## The key finding
+The same speakers appear in many training clips, but every test speaker is new. With ordinary random cross-validation, one speaker's clips end up in both training and validation, so models can partly score a clip by recognising the voice. That made CV look better than it really was and pushed me towards models that memorise voices. I measured it with speaker-verification embeddings (ECAPA-TDNN): within one voice the score barely changes, and my random folds split 187 of 208 repeated voices. Re-scoring the frozen audio model on speaker-grouped folds moved its RMSE from 0.529 to 0.622.
 
-1. Frozen encoders + Ridge. I run the Whisper-large-v3 encoder and WavLM-large over each clip, take the mean and standard deviation over time for every layer, average the layers, and fit a Ridge regression on top.
-2. Fine-tuned WavLM-large, trained end to end on the scores (random 20 s crops, 8 epochs).
-3. Fine-tuned audio LLM. Qwen2-Audio-7B loaded in 4-bit, with LoRA adapters and a regression head (QLoRA). It gets the rubric as a prompt plus 30 s of audio, and trains for 3 epochs.
-4. Adapter grader. Small per-layer adapters and one Transformer layer on top of frozen Whisper-large-v3 frames, about 1M trainable parameters. This follows the best single model of the winning Speak & Improve 2025 system, and it is also my best single model. I train it with pseudo-labels: for each fold, a teacher that never saw that fold's labels scores the held-out clips and the test clips, so no label leaks into validation.
-5. Transcript features. faster-whisper large-v3 transcripts (prompted so it keeps fillers and restarts), turned into 42 per-second and per-word features: pauses, speech rate, fillers, ASR confidence, vocabulary variety, LanguageTool errors per 100 words, GPT-2 likelihood, and spaCy syntax depth and clauses. These go into a Ridge regression.
+From then on I chose every model, every setting and the stack weights on speaker-grouped folds, where each voice is either in training or in validation. The first engine built that way became my best public score (0.3507, up from 0.3655).
 
-A non-negative linear regression on the out-of-fold predictions combines the five, and the result is clipped to [0, 5].
+## Final engine
+Five models each predict a score, and a non-negative linear stack combines them:
 
-The 37 training clips scored 0 turned out to be invalid recordings, and the test set has none of them. So the models learn from the clips scored 1-5, and a separate frozen model trained on all clips keeps anything that looks invalid near 0.
+1. Audio Ridge: frozen Whisper-large-v3 (layers 29-32) and WavLM-large (layers 17-24), mean and standard deviation over time.
+2. DeBERTa-v3-large fine-tuned on the Whisper transcripts (4 fixed epochs, 3 seeds).
+3. Frozen Qwen2.5-7B-Instruct reading the transcript, with Ridge on its hidden states.
+4. Adapter grader: small per-layer adapters and one Transformer layer on frozen Whisper frames.
+5. Frozen DeBERTa-v3 / RoBERTa transcript embeddings plus 42 fluency and grammar features (weight 0 in the final stack).
 
-Every model uses the same fixed, label-stratified 5-fold CV. I only kept a change if it improved at least 4 of 5 folds and the bootstrap 95% interval of the gain stayed above 0. `docs/decisions.md` explains each choice with the measured numbers, including the ideas that did not work.
+The models train on the 732 clips scored 1-5, because the 37 clips scored 0 are invalid recordings and the test set has none. Ridge regularisation is chosen with an inner speaker-grouped CV. Test clips that share a voice are pulled halfway towards their voice's mean prediction.
 
 ## Results
-| Model | CV RMSE | CV Pearson | Training RMSE (in-sample) | Public LB RMSE |
-|---|---|---|---|---|
-| Mean baseline | 1.238 | 0.000 | 1.238 | 1.0050 |
-| e009: frozen + fine-tuned WavLM + fine-tuned audio LLM + transcript | 0.492 | 0.918 | 0.370 | 0.3655 |
-| e013: the e009 models (trained on scores 1-5) + pseudo-labelled adapter grader | 0.470 | 0.925 | 0.443 | 0.3757 |
+Speaker-grouped CV on the 1-5 clips. "Score" is the leaderboard formula 0.6 x RMSE + 0.4 x (1 - Pearson); lower is better.
 
-These are my two final submissions. e013 is better in cross-validation: on all 5 folds, and also on the training clips that look most like the test set. e009 is better on the public leaderboard. In fact every submission that included the adapter did better in CV and worse on the public leaderboard. The public split is only about 70 clips, but a label-free check also showed the adapter's predictions drifting on the test recordings, so I kept one submission of each kind. Section 6 of the notebook goes through this in detail.
+| Model | CV RMSE | CV Pearson | Score |
+|---|---|---|---|
+| Mean baseline | 1.014 | 0 | 1.008 |
+| Audio Ridge | 0.579 | 0.821 | 0.419 |
+| Fine-tuned DeBERTa | 0.577 | 0.823 | 0.417 |
+| Qwen-7B transcript states | 0.603 | 0.805 | 0.440 |
+| Adapter grader | 0.592 | 0.814 | 0.430 |
+| **e016 stack** (models 1, 3, 5) | 0.525 | 0.856 | 0.373 |
+| **e019 stack** (all five) | **0.517** | **0.861** | **0.366** |
 
-A note on training RMSE: the fine-tuned and adapter models have no version trained on all the data (their test prediction is the average of the 5 fold models), so their out-of-fold predictions stand in when computing the stack's training RMSE. That is why e013's in-sample number is close to its CV number.
+Training RMSE (in-sample, 1-5 clips): e016 0.367, e019 0.447. The fine-tuned DeBERTa and the adapter have no all-data model, so their out-of-fold predictions stand in there, which is why e019's in-sample number is closer to its CV.
 
-| Kaggle submission | CV RMSE | Public LB RMSE |
+| Kaggle submission | Folds used to choose it | Public LB |
 |---|---|---|
-| Mean baseline | 1.238 | 1.0050 |
-| Whisper-tiny + Ridge | 0.568 | 0.4529 |
-| Whisper-large-v3 + WavLM-large + Ridge | 0.524 | 0.4165 |
-| + fine-tuned WavLM | 0.511 | 0.3985 |
-| + transcript features | 0.500 | 0.3865 |
-| + fine-tuned audio LLM (e009, final) | 0.492 | 0.3655 |
-| + adapter grader | 0.476 | 0.3742 |
-| adapter round 2 (short-clip aware) | 0.474 | 0.3790 |
-| adapter + pseudo-labels (e013, final) | 0.470 | 0.3757 |
+| Mean baseline | - | 1.0050 |
+| Frozen Whisper + WavLM + Ridge | random | 0.4165 |
+| + fine-tuned WavLM | random | 0.3985 |
+| + transcript features | random | 0.3865 |
+| + fine-tuned audio LLM (Qwen2-Audio) | random | 0.3655 |
+| + adapter grader (and two variants) | random | 0.3742-0.3790 |
+| **e016**: speaker-grouped engine | grouped | **0.3507** |
+| **e019**: e016 + fine-tuned DeBERTa + adapter | grouped | 0.3532 |
+
+My two final submissions are e019 (better on all 5 grouped folds) and e016 (best public score). The 0.0025 gap between them on the public leaderboard comes from about 70 clips and is within noise.
+
+Tried and dropped on grouped CV: fine-tuned WavLM, length-matched crop augmentation, a second literal transcript (wav2vec2 CTC), and Qwen2.5-7B fine-tuned on transcripts. None improved the stack. `docs/decisions.md` has the numbers for every attempt.
 
 ## Repository layout
 ```
-notebooks/   shl_grammar_scoring.ipynb: the report (approach, results, plots, CV vs leaderboard, error analysis)
+notebooks/   shl_grammar_scoring.ipynb: the report (approach, speaker finding, results, plots, what failed)
              shl_grammar_scoring.py: the same notebook as a plain-text (jupytext) source
-src/         audit, CV folds, embeddings, transcription, features, fine-tuning, audio LLM, adapter grader,
-             pseudo-labels, final stack, submission check
+src/         audit, folds, speaker embeddings and grouped CV, embeddings, transcription, features, text models,
+             fine-tuning scripts, adapter grader, final stacks, submission check
 kaggle/      scripts that build the Kaggle GPU jobs (one worker per T4 GPU)
-docs/        method.md (research basis) and decisions.md (why each choice was made, with measured numbers)
+docs/        method.md (research basis) and decisions.md (every choice with measured numbers)
 experiments/ log.csv: every experiment with CV and leaderboard scores
 ```
 The competition audio, labels, transcripts and anything derived from them are not in this repo, because the competition data is for competition use only.
 
 ## Reproduce
-1. `pip install -r requirements.txt` (Python 3.11). LanguageTool also needs Java.
-2. Download the data with the Kaggle CLI into `data/raw/` (you need a Kaggle account that has joined the competition).
-3. Run `python src/audit.py` and `python src/cv.py` (this fixes the folds).
-4. Run the GPU stages on Kaggle (T4 x2). For each stage, run its builder, push it with `kaggle kernels push -p kaggle/<stage> --accelerator NvidiaTeslaT4`, and download its output into `cache/`. In order: `kaggle/build_embed.sh`, `kaggle/build_transcribe.sh`, `kaggle/build_finetune.sh`, `kaggle/build_ft_alm.sh`, `kaggle/build_adapter.sh`.
-5. Run `python src/features.py`.
-6. Build the teacher, make the pseudo-labels, and train the pseudo-labelled adapter:
-   - `python src/final.py --exp e011 --no-judge --nz --drop adapter2_whisper,adapter3_whisper,adapter4mean_whisper,adapter4meanvar_whisper`
-   - `python src/pseudo.py`
-   - `kaggle/build_adapter3.sh`, then push it and download the output as in step 4.
-7. Build the two final submissions:
-   - `python src/final.py --exp e013 --no-judge --nz --drop adapter_whisper,adapter2_whisper,adapter4mean_whisper,adapter4meanvar_whisper`
-   - `python src/final.py --exp e009 --no-judge --drop adapter_whisper,adapter_wavlm,adapter2_whisper,adapter3_whisper,adapter4mean_whisper,adapter4meanvar_whisper`
-
-   Both give back the submitted files exactly from the cached model outputs.
-8. Run `notebooks/shl_grammar_scoring.ipynb`. It only reads the cached results.
+1. `pip install -r requirements.txt` (Python 3.11). LanguageTool needs Java.
+2. Download the data with the Kaggle CLI into `data/raw/`.
+3. `python src/audit.py`, `python src/cv.py`, `python src/speaker.py`, `python src/speaker_check.py`.
+4. GPU stages on Kaggle (T4 x2): run each builder, push it with `kaggle kernels push -p kaggle/<stage> --accelerator NvidiaTeslaT4`, and download its output into `cache/`. Builders: `build_embed.sh`, `build_transcribe.sh`, `build_llm_text.sh`, `build_adapter5.sh`, `build_ft_text.sh`.
+5. `python src/features.py` and `python src/text_emb.py`.
+6. `python src/final_grouped.py --exp e016` and `python src/final_grouped.py --exp e019 --fold_models cache/ft_text_run/ft_text,cache/adapter5_run/adapter5_whisper`. Both rebuild the submitted files exactly.
+7. Run `notebooks/shl_grammar_scoring.ipynb`. It only reads cached results.
 
 ## Models and licences
-Used: Whisper-large-v3 (MIT), WavLM-large (MIT), Qwen2-Audio-7B-Instruct (Apache-2.0), faster-whisper (MIT), GPT-2 (MIT), spaCy (MIT), LanguageTool (LGPL-2.1), PEFT (Apache-2.0), scikit-learn (BSD), PyTorch (BSD). Also tried: w2v-BERT 2.0 (MIT) and LightGBM (MIT). No external labelled data was used.
+Whisper-large-v3 (MIT), WavLM-large (MIT), DeBERTa-v3-large (MIT), RoBERTa-large (MIT), Qwen2.5-7B-Instruct (Apache-2.0), ECAPA-TDNN / SpeechBrain (Apache-2.0), faster-whisper (MIT), GPT-2 (MIT), spaCy (MIT), LanguageTool (LGPL-2.1), PEFT (Apache-2.0), scikit-learn (BSD), PyTorch (BSD). Also tried: Qwen2-Audio-7B (Apache-2.0), Qwen3-4B (Apache-2.0), wav2vec2-large-960h (Apache-2.0), w2v-BERT 2.0 (MIT). No external labelled data was used.
