@@ -11,8 +11,13 @@ Saves float16 .npy + the file order, every CKPT clips, and resumes from a checkp
 Multi-GPU: run one process per GPU with --shard i --nshards N (each takes a contiguous block of files),
 then once with --merge to join the blocks in order.
 
+Crop mode (augmentation, D21): --crops K embeds K random crops of every TRAIN clip, each 40-50 s long (test-like
+length; test clips have median 45 s), and keeps only the average of the chosen layers (--layer_avg) to stay small.
+Output emb_<tag>_crops.npy (n_train*K, 2*d) + crops_order.csv (filename, k, start_s, length_s).
+
 Usage: python embed.py --data DIR --out DIR [--whisper openai/whisper-large-v3] [--wavlm microsoft/wavlm-large]
                        [--limit N] [--shard I --nshards N | --merge]
+                       [--crops 3 --crop_min 40 --crop_max 50 --layer_avg whisper:29-32,wavlm:17-24]
 """
 import argparse
 import json
@@ -38,10 +43,12 @@ def device_dtype():
     return "cpu", torch.float32
 
 
-def load(path):
+def load(path, start=0.0, length=None):
     x, sr = sf.read(path, dtype="float32", always_2d=True)
     assert sr == SR, f"{path}: sample rate {sr}"
     x = x.mean(axis=1)
+    if length is not None:  # crop first, then normalise the crop's own loudness
+        x = x[int(start * SR):int((start + length) * SR)]
     # Loudness (RMS) normalisation to about -20 dBFS: quiet test clips get the same level as train.
     # RMS, not peak, so one loud click does not decide the scale of the whole clip.
     x = x * (0.1 / (np.sqrt(np.mean(x ** 2)) + 1e-8))
@@ -103,6 +110,19 @@ class W2VBertEmbedder:
         return mean_std(torch.stack(hs, 0)[:, 0].float())
 
 
+def run_crops(tag, embedder, items, out, suffix, layers):
+    """items: list of (path, start_s, length_s). Saves (len(items), 2*d) averaged over `layers` (inclusive range)."""
+    lo, hi = layers
+    t0, res = time.time(), []
+    for i, (path, st, ln) in enumerate(items):
+        e = embedder(load(path, st, ln))[lo:hi + 1].mean(0)
+        res.append(e.cpu().numpy().astype(np.float16))
+        if (i + 1) % 200 == 0:
+            print(f"[{tag} crops] {i + 1}/{len(items)}  {(time.time() - t0) / (i + 1):.2f} s/crop", flush=True)
+    np.save(out / f"emb_{tag}_crops{suffix}.npy", np.stack(res))
+    print(f"[{tag} crops] saved {len(res)} in {time.time() - t0:.0f} s", flush=True)
+
+
 def run(tag, embedder, files, out, suffix=""):
     npy, ckpt = out / f"emb_{tag}{suffix}.npy", out / f"emb_{tag}{suffix}.partial.npy"
     if npy.exists():
@@ -133,6 +153,10 @@ def main():
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--nshards", type=int, default=1)
     ap.add_argument("--merge", action="store_true", help="join shard outputs into one file per model")
+    ap.add_argument("--crops", type=int, default=0, help="crop mode: K random crops per train clip")
+    ap.add_argument("--crop_min", type=float, default=40.0)
+    ap.add_argument("--crop_max", type=float, default=50.0)
+    ap.add_argument("--layer_avg", default="whisper:29-32,wavlm:17-24", help="crop mode: layers to average per model")
     a = ap.parse_args()
     data, out = Path(a.data), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -145,6 +169,36 @@ def main():
     models = [(t, c, n) for t, c, n in [("whisper", WhisperEmbedder, a.whisper), ("wavlm", WavLMEmbedder, a.wavlm),
                                           ("w2vbert", W2VBertEmbedder, a.w2vbert)]
               if n.lower() != "none"]
+    if a.crops:
+        rng = np.random.default_rng(0)
+        rows = []
+        for f in tr.filename:
+            dur = sf.info(str(data / "train" / f)).duration
+            for k in range(a.crops):
+                ln = min(dur, rng.uniform(a.crop_min, a.crop_max))
+                rows.append((f, k, round(rng.uniform(0, max(0.0, dur - ln)), 3), round(ln, 3)))
+        co = pd.DataFrame(rows, columns=["filename", "k", "start_s", "length_s"])
+        co.to_csv(out / "crops_order.csv", index=False)
+        lay = {m.split(":")[0]: tuple(int(v) for v in m.split(":")[1].split("-")) for m in a.layer_avg.split(",")}
+        if a.merge:
+            for tag, _, _ in models:
+                arr = np.concatenate([np.load(out / f"emb_{tag}_crops.s{i}.npy") for i in range(a.nshards)])
+                assert len(arr) == len(co), (tag, arr.shape)
+                np.save(out / f"emb_{tag}_crops.npy", arr)
+                [(out / f"emb_{tag}_crops.s{i}.npy").unlink() for i in range(a.nshards)]
+                print(f"[{tag} crops] merged {arr.shape}; finite={np.isfinite(arr).all()}")
+            return
+        block = np.array_split(np.arange(len(co)), a.nshards)[a.shard]
+        items = [(str(data / "train" / co.filename[i]), co.start_s[i], co.length_s[i]) for i in block]
+        dev, dt = device_dtype()
+        print("crop mode | device", dev, "| shard", a.shard, "of", a.nshards, "| crops", len(items), flush=True)
+        for tag, cls, name in models:
+            emb = cls(name, dev, dt)
+            run_crops(tag, emb, items, out, f".s{a.shard}" if a.nshards > 1 else "", lay[tag])
+            del emb
+            if dev == "cuda":
+                torch.cuda.empty_cache()
+        return
     if a.merge:
         for tag, _, name in models:
             parts = [out / f"emb_{tag}.s{i}.npy" for i in range(a.nshards)]
